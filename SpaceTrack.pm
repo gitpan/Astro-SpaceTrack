@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.003;
+$VERSION = 0.004;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -88,7 +88,7 @@ use Config;
 use FileHandle;
 use HTTP::Response;	# Not in the base, but comes with LWP.
 use HTTP::Status qw{RC_NOT_FOUND RC_OK RC_PRECONDITION_FAILED
-	RC_UNAUTHORIZED};	# Not in the base, but comes with LWP.
+	RC_UNAUTHORIZED RC_INTERNAL_SERVER_ERROR};	# Not in the base, but comes with LWP.
 use LWP::UserAgent;	# Not in the base.
 use Text::ParseWords;
 use UNIVERSAL qw{isa};
@@ -106,6 +106,8 @@ use constant DOMAIN => 'www.space-track.org';
 use constant SESSION_PATH => '/';
 use constant SESSION_KEY => 'spacetrack_session';
 
+=pod
+
 my ($read, $print, $queue);
 BEGIN {
 my @queue;
@@ -117,6 +119,26 @@ eval {
     my $rdln = Term::ReadLine->new ('SpaceTrack orbital element access');
     $out = $rdln->OUT || \*STDOUT;
     $read = sub {@queue ? shift @queue : $rdln->readline ($prompt)};
+    };
+
+$out ||= \*STDOUT;
+$read ||= sub {print $out $prompt; <STDIN>};
+$print = sub {
+	my $hndl = UNIVERSAL::isa ($_[0], 'FileHandle') ? shift : $out;
+	print $hndl @_};
+}
+
+=cut
+
+my ($read, $print);
+BEGIN {
+my $out;
+my $prompt = 'SpaceTrack> ';
+eval {
+    require Term::ReadLine;
+    my $rdln = Term::ReadLine->new ('SpaceTrack orbital element access');
+    $out = $rdln->OUT || \*STDOUT;
+    $read = sub {$rdln->readline ($prompt)};
     };
 
 $out ||= \*STDOUT;
@@ -164,7 +186,7 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	other => {name => 'Other'},
 	},
     spacetrack => {
-	md5 => {name => 'MD5 checksums', number => 0},
+	md5 => {name => 'MD5 checksums', number => 0, special => 1},
 	full => {name => 'Full catalog', number => 1},
 	geosynchronous => {name => 'Geosynchronous satellites', number => 3},
 	navigation => {name => 'Navigation satellites', number => 5},
@@ -245,8 +267,9 @@ return $self;
 
 =item $resp = banner ();
 
-This method is a convenience/nuisance: it simply returns a fake HTTP::Response
-with standard banner text.
+This method is a convenience/nuisance: it simply returns a fake
+HTTP::Response with standard banner text. It's really just for the
+benefit of the shell method.
 
 =cut
 
@@ -287,28 +310,55 @@ HTTP::Response from login ().
 
 =cut
 
+{	# Local symbol block.
+
+my %valid_type = ('text/plain' => 1, 'text/text' => 1);
+
 sub celestrak {
 my $self = shift;
 my $name = shift;
 my $resp = $self->{agent}->get ("http://celestrak.com/SpaceTrack/query/$name.txt");
-$resp->code == RC_NOT_FOUND and do {
-    $resp->code (RC_OK);
-    $resp->content ("Didn't get it\n");
-    };
+return $self->_no_such_catalog (celestrak => $name)
+    if $resp->code == RC_NOT_FOUND;
 return $resp unless $resp->is_success;
+return $self->_no_such_catalog (celestrak => $name)
+    unless $valid_type{lc $resp->header ('Content-Type')};
 $self->_convert_content ($resp);
-my @content = split '\n', $resp->content;
-@content && $content[0] =~ m/^\d{5}/ or
-    return $self->_no_such_catalog (celestrak => $name);
-my @catnum;
-my @data;
-foreach my $line (@content) {
-    my $id = substr ($line, 0, 5);
-    push @catnum, $id;
-    push @data, [$id, substr ($line, 5)];
-    }
-$resp = $self->retrieve (sort {$a <=> $b} @catnum);
-return wantarray ? ($resp, \@data) : $resp;
+return $self->_handle_observing_list ($resp->content)
+}
+
+}	# End local symbol block.
+
+=item $resp = $st->file ($name)
+
+This method takes the name of an observing list file and returns an
+HTTP::Response object whose content is the relevant element sets.
+If called in list context, the first element of the list is the
+aforementioned HTTP::Response object, and the second element is a
+list reference to list references  (i.e. a list of lists). Each
+of the list references contains the catalog ID of a satellite or
+other orbiting body and the common name of the body.
+
+This method implicitly calls the login () method if the session cookie
+is missing or expired. If login () fails, you will get the
+HTTP::Response from login ().
+
+The observing list file is (how convenient!) in the Celestrak format,
+with the first five characters of each line containing the object ID,
+and the rest containing a name of the object. Lines whose first five
+characters do not look like a right-justified number will be ignored.
+
+=cut
+
+sub file {
+my $self = shift;
+my $name = shift;
+-e $name or return HTTP::Response->new (RC_NOT_FOUND, "Can't find file $name");
+my $fh = FileHandle->new ($name) or
+    return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR, "Can't open $name: $!");
+local $/;
+$/ = undef;
+return $self->_handle_observing_list (<$fh>)
 }
 
 
@@ -349,8 +399,11 @@ The following commands are defined:
   celestrak name
     Retrieves the named catalog of IDs from Celestrak, and the
     corresponding orbital elements from Space Track.
-  exit
+  exit (or bye)
     Terminate the shell. End-of-file also works.
+  file filename
+    Retrieve the catalog IDs given in the named file (one per
+    line, with the first five characters being the ID).
   get
     Get the value of a single attribute.
   help
@@ -373,6 +426,8 @@ The following commands are defined:
       username = the Space-Track username;
       verbose = true for verbose catalog error messages;
       with_name = true to retrieve common names as well.
+  source filename
+    Executes the contents of the given file as shell commands.
   spacetrack name
     Retrieves the named catalog of orbital elements from
     Space Track.
@@ -415,8 +470,7 @@ my $resp = $self->{agent}->post (
 $resp->is_success
     && ($self->{cookie_expires} = $self->_cookie_expiration ()) > time ()
     or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
-
-$resp;
+HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
 }
 
 
@@ -492,9 +546,6 @@ while (@_) {
 $content or return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
 $resp->content ($content);
 $self->_convert_content ($resp);
-##$resp->header (
-##    'content-length' => length ($resp->content),
-##    );
 $resp;
 }
 
@@ -593,7 +644,7 @@ Text::ParseWords to parse the line, and blank lines or lines
 beginning with a hash mark ('#') are ignored. Input is via
 Term::ReadLine if that's available. If not, we do the best we can.
 
-We also recognize 'exit' as a command.
+We also recognize 'bye' and 'exit' as commands.
 
 For commands that produce output, we allow a sort of pseudo-redirection
 of the output to a file, using the syntax ">filename". If the ">" is
@@ -614,6 +665,8 @@ Whether called as a method or as a subroutine, each argument passed
 have been executed, control passes to the user. Unless, of course,
 one of the arguments was 'exit'.
 
+Unlike most of the other methods, this one returns nothing.
+
 =cut
 
 sub shell {
@@ -622,10 +675,11 @@ $self ||= Astro::SpaceTrack->new (addendum => <<eod);
 
 'help' gets you a list of valid commands.
 eod
-$read && $print && $queue or croak "Sorry, no I/O routines available";
-$queue->('banner') if $self->{banner};
-$queue->(@_);
-while (defined (my $buffer = $read->())) {
+
+$read && $print or croak "Sorry, no I/O routines available";
+unshift @_, 'banner' if $self->{banner};
+while (defined (my $buffer = @_ ? shift : $read->())) {
+
     chomp $buffer;
     $buffer =~ s/^\s+//;
     $buffer =~ s/\s+$//;
@@ -634,10 +688,17 @@ while (defined (my $buffer = $read->())) {
     my @args = parse_line ('\s+', 0, $buffer);
     my $redir = '';
     @args = map {m/^>/ ? do {$redir = $_; ()} :
-	$redir eq '>' ? do {$redir .= $_; ()} :
+	$redir =~ m/^>+$/ ? do {$redir .= $_; ()} :
 	$_} @args;
     my $verb = lc shift @args;
-    last if $verb eq 'exit';
+    last if $verb eq 'exit' || $verb eq 'bye';
+    $verb eq 'source' and do {
+	eval {
+	    splice @_, 0, 0, $self->_source (shift @args);
+	    };
+	$@ and warn $@;
+	next;
+	};
     $verb eq 'new' || $verb =~ m/^_/ || $verb eq 'shell' ||
 	!$self->can ($verb) and do {
 	warn <<eod;
@@ -660,6 +721,21 @@ eod
     $print->("\n");
     }
 $print->("\n");
+}
+
+
+=item $st->source ($filename);
+
+This convenience method reads the given file, and passes the individual
+lines to the shell method. It croaks if the file is not provided or
+cannot be read.
+
+=cut
+
+sub source {
+my $self = shift if UNIVERSAL::isa $_[0], __PACKAGE__;
+$self ||= Astro::SpaceTrack->new ();
+$self->shell ($self->_source (@_), 'exit');
 }
 
 
@@ -686,24 +762,14 @@ HTTP::Response from login ().
 
 =cut
 
-{	# Local symbol block.
-my %catid = (md5 => 0);
-my $inx = 1;
-foreach (qw{full geosynchronous navigation weather iridium
-	orbcomm globalstar intelsat inmarsat amateur
-	visible special}) {
-    $catid{$_} = $inx;
-    $inx += 2;
-    }
-
 sub spacetrack {
 my $self = shift;
 my $catnum = shift;
 $catnum =~ m/\D/ and do {
-    defined ($catid{$catnum}) or
+    my $info = $catalogs{spacetrack}{$catnum} or
 	return $self->_no_such_catalog (spacetrack => $catnum);
-    $catnum = $catid{$catnum};
-    $catnum++ if $catnum && $self->{with_name};
+    $catnum = $info->{number};
+    $self->{with_name} && $catnum++ unless $info->{special};
     };
 my $resp = $self->_get ('perl/dl.pl', ID => $catnum);
 # At this point, assuming we succeeded, we should have headers
@@ -717,14 +783,13 @@ $resp->is_success and do {
 	Compress::Zlib::memGunzip ($resp->content));
     $resp->remove_header ('content-disposition');
     $resp->header (
-	'content-type' => 'text/text',
+	'content-type' => 'text/plain',
 ##	'content-length' => length ($resp->content),
 	);
     $self->_convert_content ($resp);
     };
 $resp;
 }
-}	# End of local symbol block.
 
 
 ####
@@ -798,6 +863,31 @@ warn $resp->headers->as_string if $self->{dump_headers};
 $resp;
 }
 
+#	_handle_observing_list takes as input any number of arguments.
+#	each is split on newlines, and lines beginning with a five-digit
+#	number (with leading spaces allowed) are taken to specify the
+#	catalog number (first five characters) and common name (the rest)
+#	of an object. The resultant catalog numbers are run through the
+#	retrieve () method. If called in scalar context, the return is
+#	the resultant HTTP::Response object. In list context, the first
+#	return is the HTTP::Response object, and the second is a reference
+#	to a list of list references, each lower-level reference containing
+#	catalog number and name.
+
+sub _handle_observing_list {
+my $self = shift;
+my (@catnum, @data);
+foreach (map {split '\n', $_} @_) {
+    s/\s+$//;
+    my ($id) = m/^([\s\d]{5})/ or next;
+    $id =~ m/^\s*\d+$/ or next;
+    push @catnum, $id;
+    push @data, [$id, substr $_, 5];
+    }
+my $resp = $self->retrieve (sort {$a <=> $b} @catnum);
+return wantarray ? ($resp, \@data) : $resp;
+}
+
 #	_mutate_attrib takes the name of an attribute and the new value
 #	for the attribute, and does what its name says.
 
@@ -839,6 +929,24 @@ my $path = shift;
 my $resp = $self->{agent}->post ("http://@{[DOMAIN]}/$path", [@_]);
 warn $resp->headers->as_string if $self->{dump_headers};
 $resp;
+}
+
+#	_source takes a filename, and returns the contents of the file
+#	as a list. It dies if anything goes wrong.
+
+sub _source {
+my $self = shift;
+wantarray or die <<eod;
+Error - _source () called in scalar or no context. This is a bug.
+eod
+my $fn = shift or die <<eod;
+Error - No source file name specified.
+eod
+my $fh = FileHandle->new ("<$fn") or die <<eod;
+Error - Failed to open source file '$fn'.
+        $!
+eod
+return <$fh>;
 }
 
 1;
@@ -895,6 +1003,23 @@ This software has not been tested under a HUGE number of operating
 systems, Perl versions, and Perl module versions. It is rather likely,
 for example, that the module will die horribly if run with an
 insufficiently-up-to-date version of LWP or HTML::Parser.
+
+=head1 MODIFICATIONS
+
+ 0.003 26-Mar-2005 T. R. Wyant
+   Initial release to CPAN.
+ 0.004 30-Mar-2005 T. R. Wyant
+   Added file method, for local observing lists.
+   Changed Content-Type header of spacetrack () response
+     to text/plain. Used to be text/text.
+   Manufactured pristine HTTP::Response for successsful
+     login call.
+   Added source method, for passing the contents of a file
+     to the shell method
+   Skip username and password prompts, and login and
+     retrieval tests if environment variable
+     AUTOMATED_TESTING is true and environment variable
+     SPACETRACK_USER is undefined.
 
 =head1 ACKNOWLEDGMENTS
 

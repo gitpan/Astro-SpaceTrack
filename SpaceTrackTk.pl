@@ -91,14 +91,27 @@ my %dsdata;
 my %dslbl = (
     celestrak => 'Catalog name:',
     spacetrack => 'Catalog name:',
+    file => 'Catalog file:',
     search_name => 'Name to search for:',
     retrieve => 'ID(s) to retrieve:',
     );
+my $dsfile_widget = $mw->Frame;
+$dsfile_widget->Entry (-relief => 'sunken', -textvariable => \$dsdata{file})
+	->grid (-row => 0, -column => 0, -padx => 5);
+$dsfile_widget->Button (-text => 'Find file ...', -command => sub {
+	my $file = $mw->getOpenFile (-filetypes => [
+		['Text files', '.txt', 'TEXT'],
+		['All files', '*'],
+		], -initialfile => $dsdata{$command},
+		-defaultextension => '.txt');
+	$dsdata{file} = $file if $file;
+	})->grid (-row => 0, -column => 1, -padx => 5);
 my %dswdgt = (
     celestrak => $mw->Optionmenu (-options => ($st->names ('celestrak'))[1],
 	-variable => \$dsdata{celestrak}),
     spacetrack => $mw->Optionmenu (-options => ($st->names ('spacetrack'))[1],
 	-variable => \$dsdata{spacetrack}),
+    file => $dsfile_widget,
     search_name => $mw->Entry (-relief => 'sunken', -textvariable => \$dsdata{search_name}),
     retrieve => $mw->Entry (-relief => 'sunken', -textvariable => \$dsdata{retrieve}),
     );
@@ -111,6 +124,7 @@ $mw->Label (-text => 'Object ID source:')
 $mw->Optionmenu (-options => [
 	['Celestrak catalog' => 'celestrak'],
 	['Space Track catalog' => 'spacetrack'],
+	['Local file catalog' => 'file'],
 	['Space Track name lookup' => 'search_name'],
 	['Space Track retrieval by ID' => 'retrieve'],
     ], -variable => \$command, -command => sub {
@@ -140,7 +154,6 @@ $row++; $col = 0;
 my $bf = $mw->Frame->grid (-row => $row, -column => 0, -columnspan => 2, -sticky => 'ew');
 $bf->Button (-text => 'Exit', -command => sub {$mw->destroy})
     ->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-##	->grid (-row => $row, -column => $col++, @pad);
 $bf->Button (-text => 'View data ...', -command => sub {
 	my $vw = $mw->Toplevel ();
 	my $tx = $vw->Scrolled ('Text', -relief => 'sunken', -scrollbars => 'oe');

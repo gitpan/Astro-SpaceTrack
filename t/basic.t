@@ -35,6 +35,11 @@ END {print "not ok 1\n" unless $loaded;}
 if ($ENV{SPACETRACK_USER}) {
     # Do nothing if we have the environment variable.
     }
+  elsif ($ENV{AUTOMATED_TESTING}) {
+
+    $skip = "Automated testing and no SPACETRACK_USER environment variable provided.";
+
+    }
   elsif ($^O eq 'VMS') {
 
     warn <<eod;
@@ -99,7 +104,7 @@ print "# Test $test_num - Retrieve some orbital elements.\n";
 skip ($skip, $skip || $st->retrieve (25544)->is_success);
 
 $test_num++;
-print "# Test $test_num - Search for something up by name.\n";
+print "# Test $test_num - Search for something by name.\n";
 skip ($skip, $skip || $st->search_name ('zarya')->is_success);
 
 $test_num++;
