@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.004;
+$VERSION = 0.005;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -105,30 +105,6 @@ use constant NO_RECORDS => 'No records found.';
 use constant DOMAIN => 'www.space-track.org';
 use constant SESSION_PATH => '/';
 use constant SESSION_KEY => 'spacetrack_session';
-
-=pod
-
-my ($read, $print, $queue);
-BEGIN {
-my @queue;
-$queue = sub {push @queue, @_};
-my $out;
-my $prompt = 'SpaceTrack> ';
-eval {
-    require Term::ReadLine;
-    my $rdln = Term::ReadLine->new ('SpaceTrack orbital element access');
-    $out = $rdln->OUT || \*STDOUT;
-    $read = sub {@queue ? shift @queue : $rdln->readline ($prompt)};
-    };
-
-$out ||= \*STDOUT;
-$read ||= sub {print $out $prompt; <STDIN>};
-$print = sub {
-	my $hndl = UNIVERSAL::isa ($_[0], 'FileHandle') ? shift : $out;
-	print $hndl @_};
-}
-
-=cut
 
 my ($read, $print);
 BEGIN {
@@ -638,9 +614,9 @@ HTTP::Response->new (RC_OK, undef, undef, COPACETIC);
 
 =item $st->shell ()
 
-This method implements a simple shell. Any method except 'new' is a
-command, and its arguments if any are parameters. We use
-Text::ParseWords to parse the line, and blank lines or lines
+This method implements a simple shell. Any public method name except
+'new' or 'shell' is a command, and its arguments if any are parameters.
+We use Text::ParseWords to parse the line, and blank lines or lines
 beginning with a hash mark ('#') are ignored. Input is via
 Term::ReadLine if that's available. If not, we do the best we can.
 
@@ -745,7 +721,7 @@ This method downloads the given bulk catalog of orbital elements. If
 the argument is an integer, it represents the number of the
 catalog to download. Otherwise, it is expected to be the name of
 the catalog, and whether you get a two-line or three-line dataset is
-specified by the setting of the with_names attribute. The return is
+specified by the setting of the with_name attribute. The return is
 the HTTP::Response object fetched. If an invalid catalog name is
 requested, an HTTP::Response object is returned, with an appropriate
 message and the error code set to RC_NOTFOUND from HTTP::Status
@@ -966,7 +942,7 @@ Astro::SpaceTrack object is instantiated, it is broken on spaces,
 and the result passed to the set command.
 
 If you specify username or password in SPACETRACK_OPT and you also
-specify SPACETRACK_USER, the latter takes precedence, an arguments
+specify SPACETRACK_USER, the latter takes precedence, and arguments
 passed explicitly to the new () method take precedence over both.
 
 =head2 SPACETRACK_USER
@@ -1020,6 +996,8 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
      retrieval tests if environment variable
      AUTOMATED_TESTING is true and environment variable
      SPACETRACK_USER is undefined.
+ 0.005 02-Apr-2005 T. R. Wyant
+   Proofread and correct POD.
 
 =head1 ACKNOWLEDGMENTS
 
