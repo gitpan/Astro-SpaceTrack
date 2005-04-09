@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.005;
+$VERSION = 0.006;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -259,7 +259,8 @@ Perl $Config{version} under $^O
 You must register with http://@{[DOMAIN]}/ and get a
 username and password before you can make use of this package,
 and you must abide by that site's restrictions, which include
-not making the data available to a third party.
+not making the data available to a third party without prior
+permission.
 
 Copyright 2005 T. R. Wyant (wyant at cpan dot org)
 
@@ -393,8 +394,10 @@ The following commands are defined:
   retrieve number ...
     Retieves the latest orbital elements for the given
     catalog numbers.
+  search_id id ...
+    Retrieves orbital elements by international designator.
   search_name name ...
-    Looks up the catalog numbers of one or more names.
+    Retrieves orbital elements by satellite common name.
   set attribute value ...
     Sets the given attributes. Legal attributes are
       banner = false to supress the shell () banner;
@@ -526,6 +529,74 @@ $resp;
 }
 
 
+=item $resp = $st->search_id (id ...)
+
+This method searches the database for objects having the given
+international IDs. The international ID is the last two digits
+of the launch year (in the range 1957 through 2056), the
+three-digit sequence number of the launch within the year (with
+leading zeroes as needed), and the piece (A through ZZ, with A
+typically being the payload). You can omit the piece and get all
+pieces of that launch, or omit both the piece and the launch
+number and get all launches for the year. There is no
+mechanism to restrict the search to a given date range, on-orbit
+status, or to filter out debris or rocket bodies.
+
+This method implicitly calls the login () method if the session cookie
+is missing or expired. If login () fails, you will get the
+HTTP::Response from login ().
+
+On success, this method returns an HTTP::Response object whose content
+is the relevant element sets. If called in list context, the first
+element of the list is the aforementioned HTTP::Response object, and
+the second element is a list reference to list references  (i.e. a list
+of lists). The first list reference contains the header text for all
+columns returned, and the subsequent list references contain the data
+for each match.
+
+=cut
+
+sub search_id {
+my $self = shift;
+my $p = Astro::SpaceTrack::Parser->new ();
+@_ or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
+
+my @table;
+my %id;
+foreach my $name (@_) {
+# Note that the only difference between this and search_name is
+# the code from here vvvvvvvv
+    my ($year, $number, $piece) =
+	$name =~ m/^(\d\d)(\d{3})?([[:alpha:]])?$/ or next;
+    $year += $year < 57 ? 2000 : 1900;
+    my $resp = $self->_post ('perl/launch_query.pl',
+	launch_year => $year,
+	launch_number => $number || '',
+	piece => uc ($piece || ''),
+	status => 'all',	# or 'onorbit' or 'decayed'.
+##	exclude => '',		# or 'debris' or 'rocket' or both.
+	_sessionid => '',
+	_submit => 'submit',
+	_submitted => 1,
+	);
+# to here ^^^^^^^^^^^^^^^^
+    return $resp unless $resp->is_success;
+    my $content = $resp->content;
+    next if $content =~ m/No results found/i;
+    my @this_page = @{$p->parse_string (table => $content)};
+    my @data = @{$this_page[0]};
+    foreach my $row (@data) {
+	pop @$row; pop @$row;
+	}
+    if (@table) {shift @data} else {push @table, shift @data};
+    foreach my $row (@data) {
+	push @table, $row unless $id{$row->[0]}++;
+	}
+    }
+my $resp = $self->retrieve (sort {$a <=> $b} keys %id);
+wantarray ? ($resp, \@table) : $resp;
+}
+
 =item $resp = $st->search_name (name ...)
 
 This method searches the database for the named objects. Matches
@@ -623,14 +694,16 @@ Term::ReadLine if that's available. If not, we do the best we can.
 We also recognize 'bye' and 'exit' as commands.
 
 For commands that produce output, we allow a sort of pseudo-redirection
-of the output to a file, using the syntax ">filename". If the ">" is
-by itself the next argument is the filename. The redirection can occur
-anywhere on the line. For example,
+of the output to a file, using the syntax ">filename" or ">>filename".
+If the ">" is by itself the next argument is the filename. In addition,
+we do pseudo-tilde expansion by replacing a leading tilde with the
+contents of environment variable HOME. Redirection can occur anywhere
+on the line. For example,
 
  SpaceTrack> catalog special >special.txt
 
 sends the "Special Interest Satellites" to file special.txt. Line
-terminations should be appropriate to your OS.
+terminations in the file should be appropriate to your OS.
 
 This method can also be called as a subroutine - i.e. as
 
@@ -666,6 +739,7 @@ while (defined (my $buffer = @_ ? shift : $read->())) {
     @args = map {m/^>/ ? do {$redir = $_; ()} :
 	$redir =~ m/^>+$/ ? do {$redir .= $_; ()} :
 	$_} @args;
+    $redir =~ s/^(>+)~/$1$ENV{HOME}/;
     my $verb = lc shift @args;
     last if $verb eq 'exit' || $verb eq 'bye';
     $verb eq 'source' and do {
@@ -956,15 +1030,15 @@ An explicit username and/or password passed to the new () method
 overrides the environment variable, as does any subsequently-set
 username or password.
 
-=head1 SPECIMEN SCRIPTS
+=head1 EXECUTABLES
 
-A couple specimen scripts are included in this distribution:
+A couple specimen executables are included in this distribution:
 
-=head2 SpaceTrack.pl
+=head2 SpaceTrack
 
 This is just a wrapper for the shell () method.
 
-=head2 SpaceTrackTk.pl
+=head2 SpaceTrackTk
 
 This provides a Perl/Tk interface to Astro::SpaceTrack.
 
@@ -998,6 +1072,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
      SPACETRACK_USER is undefined.
  0.005 02-Apr-2005 T. R. Wyant
    Proofread and correct POD.
+ 0.006 08-Apr-2005 T. R. Wyant
+   Added search_id method.
+   Made specimen scripts into installable executables.
+   Add pseudo-tilde expansion to shell method.
 
 =head1 ACKNOWLEDGMENTS
 

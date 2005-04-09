@@ -26,11 +26,18 @@ return $input;
 }
 
 BEGIN {
-plan (tests => 7);
+plan (tests => 8);
 print "# Test 1 - Loading the library.\n"
 }
 
 END {print "not ok 1\n" unless $loaded;}
+
+use Astro::SpaceTrack;
+
+$loaded = 1;
+ok ($loaded);
+
+######################### End of black magic.
 
 if ($ENV{SPACETRACK_USER}) {
     # Do nothing if we have the environment variable.
@@ -79,13 +86,6 @@ eod
 	}
     }
 
-use Astro::SpaceTrack;
-
-$loaded = 1;
-ok ($loaded);
-
-######################### End of black magic.
-
 $test_num++;
 print "# Test $test_num - Instantiate the object.\n";
 my $st;
@@ -106,6 +106,10 @@ skip ($skip, $skip || $st->retrieve (25544)->is_success);
 $test_num++;
 print "# Test $test_num - Search for something by name.\n";
 skip ($skip, $skip || $st->search_name ('zarya')->is_success);
+
+$test_num++;
+print "# Test $test_num - Search by international designator.\n";
+skip ($skip, $skip || $st->search_id ('98067A')->is_success);
 
 $test_num++;
 print "# Test $test_num - Fetch a Celestrak data set.\n";

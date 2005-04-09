@@ -1,16 +1,17 @@
-#!/usr/bin/perl
-#	Title:	SpaceTrack.pl
+#!/usr/local/bin/perl
+#	Title:	SpaceTrackTk
 #	Author:	T. R. Wyant
 #	Date:	07-Mar-2005
 #	Modified:
 #	Remarks:
-#		This Perl script is just a really simple encapsulation
-#		of the Astro::SpaceTrack shell subroutine. Note that the
-#		command line arguments are passed, so you can do things
-#		like
-#		$ perl SpaceTrack.pl 'set username me password secret'
-#		followed by whatever commands you like at the SpaceTrack
-#		prompt.
+#		This Perl script provides a Perl/Tk interface to the
+#		Astro::SpaceTrack package. Command arguments are passed to
+#		the instantiated object, so that you can do things like
+#		$ perl SpaceTrackTk 'set username me password secret'
+#		to initialize your session.
+#
+#		Copyright 2005 by Thomas R. Wyant, III
+#		(wyant at cpan dot org)
 
 use strict;
 use warnings;
@@ -20,7 +21,7 @@ use Tk;
 
 my @pad = qw{-padx 5 -pady 5};
 
-my $st = Astro::SpaceTrack->new ();
+my $st = Astro::SpaceTrack->new (@ARGV);
 
 my ($mw, $row, $col);
 $row = $col = 0;
@@ -93,7 +94,8 @@ my %dslbl = (
     spacetrack => 'Catalog name:',
     file => 'Catalog file:',
     search_name => 'Name to search for:',
-    retrieve => 'ID(s) to retrieve:',
+    search_id => 'International Designator(s):',
+    retrieve => 'Satellite ID(s):',
     );
 my $dsfile_widget = $mw->Frame;
 $dsfile_widget->Entry (-relief => 'sunken', -textvariable => \$dsdata{file})
@@ -113,6 +115,7 @@ my %dswdgt = (
 	-variable => \$dsdata{spacetrack}),
     file => $dsfile_widget,
     search_name => $mw->Entry (-relief => 'sunken', -textvariable => \$dsdata{search_name}),
+    search_id => $mw->Entry (-relief => 'sunken', -textvariable => \$dsdata{search_id}),
     retrieve => $mw->Entry (-relief => 'sunken', -textvariable => \$dsdata{retrieve}),
     );
 my %dsxfrm = (
@@ -126,7 +129,8 @@ $mw->Optionmenu (-options => [
 	['Space Track catalog' => 'spacetrack'],
 	['Local file catalog' => 'file'],
 	['Space Track name lookup' => 'search_name'],
-	['Space Track retrieval by ID' => 'retrieve'],
+	['Space Track international designator lookup' => 'search_id'],
+	['Space Track satellite IDs' => 'retrieve'],
     ], -variable => \$command, -command => sub {
 	$current and $current->gridForget ();
 	$label = $dslbl{$command};
