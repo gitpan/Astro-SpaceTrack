@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.006;
+$VERSION = 0.007;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -446,8 +446,9 @@ my $resp = $self->{agent}->post (
 	_sessionid => "",
 	]);
 
-$resp->is_success
-    && ($self->{cookie_expires} = $self->_cookie_expiration ()) > time ()
+$resp->is_success or return $resp;
+
+($self->{cookie_expires} = $self->_cookie_expiration ()) > time ()
     or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
 HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
 }
@@ -664,6 +665,24 @@ either does not exist or cannot be set.
 For the convenience of the shell method, we return a HTTP::Response
 object with a success status if all goes well. But if we encounter
 an error we croak.
+
+The following attributes may be set:
+
+ addendum text
+   specifies text to add to the output of the banner() method.
+ banner boolean
+   specifies whether or not the shell() method should emit the banner
+   text on invocation. True by default.
+ password text
+   specifies the Space-Track password.
+ username text
+   specifies the Space-Track username.
+ verbose boolean
+   specifies verbose error messages. False by default.
+ with_name boolean
+   specifies whether the returned element sets should include the
+   common name of the body (three-line format) or not (two-line
+   format). False by default.
 
 =cut
 
@@ -1076,6 +1095,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Added search_id method.
    Made specimen scripts into installable executables.
    Add pseudo-tilde expansion to shell method.
+ 0.007 15-Apr-2005 T. R. Wyant
+   Document attributes (under set() method)
+   Have login return actual failure on HTTP error. Used
+     to return 401 any time we didn't get the cookie.
 
 =head1 ACKNOWLEDGMENTS
 
