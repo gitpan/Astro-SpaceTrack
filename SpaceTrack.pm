@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.007;
+$VERSION = 0.008;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -90,6 +90,7 @@ use HTTP::Response;	# Not in the base, but comes with LWP.
 use HTTP::Status qw{RC_NOT_FOUND RC_OK RC_PRECONDITION_FAILED
 	RC_UNAUTHORIZED RC_INTERNAL_SERVER_ERROR};	# Not in the base, but comes with LWP.
 use LWP::UserAgent;	# Not in the base.
+use POSIX qw{strftime};
 use Text::ParseWords;
 use UNIVERSAL qw{isa};
 
@@ -181,8 +182,10 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 my %mutator = (	# Mutators for the various attributes.
     addendum => \&_mutate_attrib,		# Addendum to banner text.
     banner => \&_mutate_attrib,
+    cookie_expires => \&_mutate_attrib,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
     password => \&_mutate_attrib,
+    session_cookie => \&_mutate_cookie,
     username => \&_mutate_attrib,
     verbose => \&_mutate_attrib,
     with_name => \&_mutate_attrib,
@@ -213,7 +216,10 @@ $class = ref $class if ref $class;
 my $self = {
     agent => LWP::UserAgent->new (),
     banner => 1,	# shell () displays banner if true.
+    cookie_expires => undef,
+    dump_headers => 0,	# No dumping.
     password => undef,	# Login password.
+    session_cookie => undef,
     username => undef,	# Login username.
     verbose => undef,	# Verbose error messages for catalogs.
     with_name => undef,	# True to retrieve three-line element sets.
@@ -235,7 +241,7 @@ $ENV{SPACETRACK_USER} and do {
 $self->{agent}->cookie_jar ({})
     unless $self->{agent}->cookie_jar;
 
-$self->{cookie_expires} = $self->_cookie_expiration ();
+$self->_check_cookie ();
 
 return $self;
 }
@@ -308,13 +314,13 @@ return $self->_handle_observing_list ($resp->content)
 
 =item $resp = $st->file ($name)
 
-This method takes the name of an observing list file and returns an
-HTTP::Response object whose content is the relevant element sets.
-If called in list context, the first element of the list is the
-aforementioned HTTP::Response object, and the second element is a
-list reference to list references  (i.e. a list of lists). Each
-of the list references contains the catalog ID of a satellite or
-other orbiting body and the common name of the body.
+This method takes the name of an observing list file, or a handle to
+an open observing list file, and returns an HTTP::Response object whose
+content is the relevant element sets. If called in list context, the
+first element of the list is the aforementioned HTTP::Response object,
+and the second element is a list reference to list references  (i.e.
+a list of lists). Each of the list references contains the catalog ID
+of a satellite or other orbiting body and the common name of the body.
 
 This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
@@ -330,6 +336,7 @@ characters do not look like a right-justified number will be ignored.
 sub file {
 my $self = shift;
 my $name = shift;
+ref $name and fileno ($name) and return $self->_handle_observing_list (<$name>);
 -e $name or return HTTP::Response->new (RC_NOT_FOUND, "Can't find file $name");
 my $fh = FileHandle->new ($name) or
     return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR, "Can't open $name: $!");
@@ -400,11 +407,19 @@ The following commands are defined:
     Retrieves orbital elements by satellite common name.
   set attribute value ...
     Sets the given attributes. Legal attributes are
+      addendum = extra text for the shell () banner;
       banner = false to supress the shell () banner;
+      cookie_expires = Perl date the session cookie expires;
+      dump_headers is unsupported, and intended for debugging -
+        don't be suprised at anything it does, and don't rely
+        on anything it does;
       password = the Space-Track password;
+      session_cookie = the text of the session cookie;
       username = the Space-Track username;
       verbose = true for verbose catalog error messages;
       with_name = true to retrieve common names as well.
+    The session_cookie and cookie_expires attributes should
+    only be set to previously-retrieved, matching values.
   source filename
     Executes the contents of the given file as shell commands.
   spacetrack name
@@ -435,6 +450,9 @@ my $self = shift;
 $self->{username} && $self->{password} or
     return HTTP::Response->new (
 	RC_PRECONDITION_FAILED, NO_CREDENTIALS);
+$self->{dump_headers} and warn <<eod;
+Logging in as $self->{username}.
+eod
 
 #	Do not use the _post method to retrieve the session cookie,
 #	unless you like bottomless recursions.
@@ -447,9 +465,14 @@ my $resp = $self->{agent}->post (
 	]);
 
 $resp->is_success or return $resp;
+$self->_dump_headers ($resp) if $self->{dump_headers};
 
-($self->{cookie_expires} = $self->_cookie_expiration ()) > time ()
+$self->_check_cookie () > time ()
     or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
+
+$self->{dump_headers} and warn <<eod;
+Login successful.
+eod
 HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
 }
 
@@ -673,8 +696,14 @@ The following attributes may be set:
  banner boolean
    specifies whether or not the shell() method should emit the banner
    text on invocation. True by default.
+ cookie_expires number
+   specifies the expiration time of the cookie. You should only set
+   with a previously-retrieved value, which matches the cookie.
  password text
    specifies the Space-Track password.
+ session_cookie text
+   specifies the session cookie. You should only set this with a
+   previously-retrieved value.
  username text
    specifies the Space-Track username.
  verbose boolean
@@ -866,6 +895,31 @@ $resp;
 #	Private methods.
 #
 
+#	_check_cookie looks for our session cookie. If it's found, it returns
+#	the cookie's expiration time and sets the relevant attributes.
+#	Otherwise it returns zero.
+
+sub _check_cookie {
+my $self = shift;
+my ($cookie, $expir);
+$expir = 0;
+$self->{agent}->cookie_jar->scan (sub {
+    $self->{dump_headers} > 1 and _dump_cookie ("_check_cookie:\n", @_);
+    ($cookie, $expir) = @_[2, 8] if $_[4] eq DOMAIN &&
+	$_[3] eq SESSION_PATH && $_[1] eq SESSION_KEY;
+    });
+$self->{dump_headers} and warn $expir ? <<eod : <<eod;
+Session cookie: $cookie
+Cookie expiration: @{[strftime '%d-%b-%Y %H:%M:%S', localtime $expir]} ($expir)
+eod
+Session cookie not found
+eod
+$self->{session_cookie} = $cookie;
+$self->{cookie_expires} = $expir;
+return $expir || 0;
+}
+
+
 #	_convert_content converts the content of an HTTP::Response
 #	from crlf-delimited to lf-delimited.
 
@@ -877,7 +931,6 @@ local $/;
 $/ = undef;	# Slurp mode.
 foreach my $resp (@_) {
     my $buffer = $resp->content;
-##print STDERR "Debug _convert_content: first is ", ord (substr ($buffer, 0, 1)), "\n";
     $buffer =~ s|$lookfor|\n|gms;
     1 while ($buffer =~ s|^\n||ms);
     $buffer =~ s|\s+$||ms;
@@ -890,17 +943,53 @@ foreach my $resp (@_) {
 }
 }	# End local symbol block.
 
-#	_cookie_expiration checks the cookie jar for the session cookie.
-#	If it exists, it returns the expiration time (which may already
-#	have passed). Otherwise it returns 0.
+#	_dump_cookie is intended to be called from inside the
+#	HTTP::Cookie->scan method. The first argument is prefix text
+#	for the dump, and the subsequent arguments are the arguments
+#	passed to the scan method.
+#	It dumps the contents of the cookie to STDERR via a warn ().
+#	A typical session cookie looks like this:
+#	    version => 0
+#	    key => 'spacetrack_session'
+#	    val => whatever
+#	    path => '/'
+#	    domain => 'www.space-track.org'
+#	    port => undef
+#	    path_spec => 1
+#	    secure => undef
+#	    expires => undef
+#	    discard => 1
+#	    hash => {}
+#	The response to the login, though, has an actual expiration
+#	time, which we take cognisance of.
 
-sub _cookie_expiration {
+use Data::Dumper;
+{	# begin local symbol block
+my @names = qw{version key val path domain port path_spec secure
+	expires discard hash};
+sub _dump_cookie {
+local $Data::Dumper::Terse = 1;
+my $prefix = shift;
+$prefix and warn $prefix;
+for (my $inx = 0; $inx < @names; $inx++) {
+    warn "    $names[$inx] => ", Dumper ($_[$inx]);
+    }
+}
+}	# end local symbol block
+
+
+#	_dump_headers dumps the headers of the passed-in response
+#	object.
+
+sub _dump_headers {
 my $self = shift;
-my $expir = 0;
+my $resp = shift;
+local $Data::Dumper::Terse = 1;
+warn "\nHeaders:\n", $resp->headers->as_string, "\nCookies:\n";
 $self->{agent}->cookie_jar->scan (sub {
-    $expir = $_[8] if $_[4] eq DOMAIN && $_[3] eq SESSION_PATH &&
-	$_[1] eq SESSION_KEY});
-return $expir;
+    _dump_cookie ("\n", @_);
+    });
+warn "\n";
 }
 
 #	_get gets the given path on the domain. Arguments after the
@@ -912,10 +1001,6 @@ return $expir;
 
 sub _get {
 my $self = shift;
-$self->{cookie_expires} > time () or do {
-    my $resp = $self->login ();
-    return $resp unless $resp->is_success;
-    };
 my $path = shift;
 my $cgi = '';
 while (@_) {
@@ -924,13 +1009,39 @@ while (@_) {
     $cgi .= "&$name=$val";
     }
 $cgi and substr ($cgi, 0, 1) = '?';
-my $resp = $self->{agent}->get ("http://@{[DOMAIN]}/$path$cgi");
-$resp->is_success and do {
-    my $content = $resp->content;
-    };
-warn $resp->headers->as_string if $self->{dump_headers};
-$resp;
+{	# Single-iteration loop
+    $self->{cookie_expires} > time () or do {
+	my $resp = $self->login ();
+	return $resp unless $resp->is_success;
+	};
+    my $resp = $self->{agent}->get ("http://@{[DOMAIN]}/$path$cgi");
+    $self->_dump_headers ($resp) if $self->{dump_headers};
+    return $resp unless $resp->is_success;
+    local $_ = $resp->content;
+    m/login\.pl/i and do {
+	$self->{cookie_expires} = 0;
+	redo;
+	};
+    return $resp;
+    }	# end of single-iteration loop
 }
+
+#	Note: If we have a bad cookie, we get a success status, with
+#	the text
+# <?xml version="1.0" encoding="iso-8859-1"?>
+# <!DOCTYPE html
+#         PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+#          "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+# <html xmlns="http://www.w3.org/1999/xhtml" lang="en-US" xml:lang="en-US"><head><title>Space-Track</title>
+# </head><body>
+# <body bgcolor='#fffacd' text='#191970' link='#3333e6'>
+#          <div align='center'><img src='http://www.space-track.org/icons/spacetrack_logo3.jpg' width=640 height=128 align='top' border=0></div>
+# <h2>Error, Corrupted session cookie<br>
+# Please <A HREF='login.pl'>LOGIN</A> again.<br>
+# </h2>
+# </body></html>
+#	If this happens, it would be good to retry the login.
+
 
 #	_handle_observing_list takes as input any number of arguments.
 #	each is split on newlines, and lines beginning with a five-digit
@@ -962,6 +1073,15 @@ return wantarray ? ($resp, \@data) : $resp;
 
 sub _mutate_attrib {$_[0]{$_[1]} = $_[2]}
 
+#	_mutate_cookie sets the session cookie, in both the object and
+#	the user agent's cookie jar.
+
+sub _mutate_cookie {
+$_[0]->{agent}->cookie_jar->set_cookie (0, SESSION_KEY, $_[2],
+    SESSION_PATH, DOMAIN, undef, 1, undef, undef, 1, {});
+goto &_mutate_attrib;
+}
+
 #	_no_such_catalog takes as arguments a source and catalog name,
 #	and returns the appropriate HTTP::Response object based on the
 #	current verbosity setting.
@@ -990,14 +1110,22 @@ return HTTP::Response->new (RC_NOT_FOUND,
 
 sub _post {
 my $self = shift;
-$self->{cookie_expires} > time () or do {
-    my $resp = $self->login ();
-    return $resp unless $resp->is_success;
-    };
 my $path = shift;
-my $resp = $self->{agent}->post ("http://@{[DOMAIN]}/$path", [@_]);
-warn $resp->headers->as_string if $self->{dump_headers};
-$resp;
+{	# Single-iteration loop
+    $self->{cookie_expires} > time () or do {
+	my $resp = $self->login ();
+	return $resp unless $resp->is_success;
+	};
+    my $resp = $self->{agent}->post ("http://@{[DOMAIN]}/$path", [@_]);
+    $self->_dump_headers ($resp) if $self->{dump_headers};
+    return $resp unless $resp->is_success;
+    local $_ = $resp->content;
+    m/login\.pl/i and do {
+	$self->{cookie_expires} = 0;
+	redo;
+	};
+    return $resp;
+    }	# end of single-iteration loop
 }
 
 #	_source takes a filename, and returns the contents of the file
@@ -1099,6 +1227,12 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Document attributes (under set() method)
    Have login return actual failure on HTTP error. Used
      to return 401 any time we didn't get the cookie.
+ 0.008 19-Jul-2005 T. R. Wyant
+   Consolidate dump code.
+   Have file() method take open handle as arg.
+   Modify cookie check.
+   Add mutator, accessor for cookie_expires,
+     session_cookie.
 
 =head1 ACKNOWLEDGMENTS
 
