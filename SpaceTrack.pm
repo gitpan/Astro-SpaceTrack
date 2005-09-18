@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.008;
+$VERSION = 0.009;
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -106,25 +106,6 @@ use constant NO_RECORDS => 'No records found.';
 use constant DOMAIN => 'www.space-track.org';
 use constant SESSION_PATH => '/';
 use constant SESSION_KEY => 'spacetrack_session';
-
-my ($read, $print);
-BEGIN {
-my $out;
-my $prompt = 'SpaceTrack> ';
-eval {
-    require Term::ReadLine;
-    my $rdln = Term::ReadLine->new ('SpaceTrack orbital element access');
-    $out = $rdln->OUT || \*STDOUT;
-    $read = sub {$rdln->readline ($prompt)};
-    };
-
-$out ||= \*STDOUT;
-$read ||= sub {print $out $prompt; <STDIN>};
-$print = sub {
-	my $hndl = UNIVERSAL::isa ($_[0], 'FileHandle') ? shift : $out;
-	print $hndl @_};
-}
-
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -766,12 +747,32 @@ Unlike most of the other methods, this one returns nothing.
 
 =cut
 
+my ($read, $print, $out);
+
 sub shell {
 my $self = shift if UNIVERSAL::isa $_[0], __PACKAGE__;
 $self ||= Astro::SpaceTrack->new (addendum => <<eod);
 
 'help' gets you a list of valid commands.
 eod
+
+################
+
+my $prompt = 'SpaceTrack> ';
+eval {
+    require Term::ReadLine;
+    my $rdln = Term::ReadLine->new ('SpaceTrack orbital element access');
+    $out = $rdln->OUT || \*STDOUT;
+    $read = sub {$rdln->readline ($prompt)};
+    };
+
+$out ||= \*STDOUT;
+$read ||= sub {print $out $prompt; <STDIN>};
+$print = sub {
+	my $hndl = UNIVERSAL::isa ($_[0], 'FileHandle') ? shift : $out;
+	print $hndl @_};
+
+################
 
 $read && $print or croak "Sorry, no I/O routines available";
 unshift @_, 'banner' if $self->{banner};
@@ -1233,13 +1234,16 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Modify cookie check.
    Add mutator, accessor for cookie_expires,
      session_cookie.
+ 0.009 17-Sep-2005 T. R. Wyant
+   Only require Term::ReadLine and create interface if
+   the shell() method actually called.
 
 =head1 ACKNOWLEDGMENTS
 
 The author wishes to thank Dr. T. S. Kelso of
 L<http://celestrak.com/> and the staff of L<http://www.space-track.org/>
-(whose names are unfortunately unknown to me) for their co-operation, assistance and
-encouragement.
+(whose names are unfortunately unknown to me) for their co-operation,
+assistance and encouragement.
 
 =head1 AUTHOR
 
