@@ -78,7 +78,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = 0.009;
+$VERSION = "0.010";
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -164,6 +164,7 @@ my %mutator = (	# Mutators for the various attributes.
     addendum => \&_mutate_attrib,		# Addendum to banner text.
     banner => \&_mutate_attrib,
     cookie_expires => \&_mutate_attrib,
+    direct => \&_mutate_attrib,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
     password => \&_mutate_attrib,
     session_cookie => \&_mutate_cookie,
@@ -268,7 +269,9 @@ list reference to list references  (i.e. a list of lists). Each
 of the list references contains the catalog ID of a satellite or
 other orbiting body and the common name of the body.
 
-This method implicitly calls the login () method if the session cookie
+If the 'direct' attribute is true, the elements will be fetched
+directly from Celestrak, and no login is needed. Otherwise, This
+method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
@@ -281,12 +284,15 @@ my %valid_type = ('text/plain' => 1, 'text/text' => 1);
 sub celestrak {
 my $self = shift;
 my $name = shift;
-my $resp = $self->{agent}->get ("http://celestrak.com/SpaceTrack/query/$name.txt");
+my $resp = $self->{direct} ?
+    $self->{agent}->get ("http://celestrak.com/NORAD/elements/$name.txt") :
+    $self->{agent}->get ("http://celestrak.com/SpaceTrack/query/$name.txt");
 return $self->_no_such_catalog (celestrak => $name)
     if $resp->code == RC_NOT_FOUND;
 return $resp unless $resp->is_success;
 return $self->_no_such_catalog (celestrak => $name)
     unless $valid_type{lc $resp->header ('Content-Type')};
+return $resp if $self->{direct};
 $self->_convert_content ($resp);
 return $self->_handle_observing_list ($resp->content)
 }
@@ -362,8 +368,10 @@ sub help {
 HTTP::Response->new (RC_OK, undef, undef, <<eod);
 The following commands are defined:
   celestrak name
-    Retrieves the named catalog of IDs from Celestrak, and the
-    corresponding orbital elements from Space Track.
+    Retrieves the named catalog of IDs from Celestrak. If the
+    direct attribute is false (the default), the corresponding
+    orbital elements come from Space Track. If true, they come
+    from Celestrak, and no login is needed.
   exit (or bye)
     Terminate the shell. End-of-file also works.
   file filename
@@ -390,6 +398,9 @@ The following commands are defined:
     Sets the given attributes. Legal attributes are
       addendum = extra text for the shell () banner;
       banner = false to supress the shell () banner;
+      direct = true to fetch orbital elements directly
+        from a redistributor. Currently this only affects the
+        celestrak() method. The default is false.
       cookie_expires = Perl date the session cookie expires;
       dump_headers is unsupported, and intended for debugging -
         don't be suprised at anything it does, and don't rely
@@ -1237,6 +1248,9 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
  0.009 17-Sep-2005 T. R. Wyant
    Only require Term::ReadLine and create interface if
    the shell() method actually called.
+ 0.010 14-Oct-2005 T. R. Wyant
+   Added the 'direct' attribute, to fetch elements
+   directly from celestrak. And about time, too.
 
 =head1 ACKNOWLEDGMENTS
 

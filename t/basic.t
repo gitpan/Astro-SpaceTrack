@@ -26,7 +26,7 @@ return $input;
 }
 
 BEGIN {
-plan (tests => 8);
+plan (tests => 9);
 print "# Test 1 - Loading the library.\n"
 }
 
@@ -115,3 +115,7 @@ $test_num++;
 print "# Test $test_num - Fetch a Celestrak data set.\n";
 skip ($skip, $skip || $st->celestrak ('stations')->is_success);
 
+$test_num++;
+print "# Test $test_num - Direct-fetch a Celestrak data set.\n";
+$st->set (username => undef, password => undef, direct => 1);
+ok ($st->celestrak ('stations')->is_success);
