@@ -1,9 +1,12 @@
-MANIFEST
-Makefile.PL
 bin/SpaceTrack
 bin/SpaceTrackTk
+Changes
+MANIFEST
+Makefile.PL
 SpaceTrack.pm
 SpaceTrack/Parser.pm
-Readme
+README
 t/basic.t
+t/pod.t
+t/pod_coverage.t
 META.yml                                 Module meta-data (added by MakeMaker)

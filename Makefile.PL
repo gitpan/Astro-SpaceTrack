@@ -9,9 +9,11 @@ use FileHandle;
 use Getopt::Std;
 
 my %opt;
-getopts ('n', \%opt) or die <<eod;
-The only legal option is
+getopts ('ny', \%opt) or die <<eod;
+The only legal options are
   -n = answer all questions 'no'.
+  -y = answer all questions 'yes'.
+You may not assert both of these at once - it's too confusing.
 eod
 
 my @exe_files;
@@ -31,11 +33,16 @@ accordingly.
 
 eod
 
+my @possible_exes = qw{SpaceTrack SpaceTrackTk};
 if ($opt{n}) {
     print "Because you have asserted -n, the executables will not be installed.\n\n";
     }
+  elsif ($opt{y}) {
+    print "Because you have asserted -y, the executables will be installed.\n\n";
+    @exe_files = @possible_exes;
+    }
   else {
-    foreach (qw{SpaceTrack SpaceTrackTk}) {
+    foreach (@possible_exes) {
 	push @exe_files, $_
 	    if prompt ("Do you want to install $_?", 'n') =~ m/^y/i;
 	}

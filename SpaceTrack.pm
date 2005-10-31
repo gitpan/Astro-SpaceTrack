@@ -60,6 +60,11 @@ There is no provision for the retrieval of historical data.
 Nothing is exported by default, but the shell method/subroutine
 can be exported if you so desire.
 
+Most methods return an HTTP::Response object. See the individual
+method document for details. Methods which return orbital data on
+success add a 'Pragma: spacetrack-type = orbit' header to the
+HTTP::Response object if the request succeeds.
+
 =head2 Methods
 
 The following methods should be considered public:
@@ -78,7 +83,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = "0.010";
+$VERSION = "0.011";
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -275,6 +280,9 @@ method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 {	# Local symbol block.
@@ -283,6 +291,7 @@ my %valid_type = ('text/plain' => 1, 'text/text' => 1);
 
 sub celestrak {
 my $self = shift;
+delete $self->{_content_type};
 my $name = shift;
 my $resp = $self->{direct} ?
     $self->{agent}->get ("http://celestrak.com/NORAD/elements/$name.txt") :
@@ -292,12 +301,45 @@ return $self->_no_such_catalog (celestrak => $name)
 return $resp unless $resp->is_success;
 return $self->_no_such_catalog (celestrak => $name)
     unless $valid_type{lc $resp->header ('Content-Type')};
-return $resp if $self->{direct};
 $self->_convert_content ($resp);
-return $self->_handle_observing_list ($resp->content)
+if ($self->{direct}) {
+    $self->{_content_type} = 'orbit';
+    $resp->push_header (pragma => 'spacetrack-type = orbit');
+    return $resp;
+    }
+  else {
+    return $self->_handle_observing_list ($resp->content);
+    }
 }
 
 }	# End local symbol block.
+
+
+=item $type = $st->content_type ($resp);
+
+This method takes the given HTTP::Response object and returns the
+data type specified by the 'Pragma: spacetrack-type =' header. The
+following values are supported:
+
+ 'orbit': The content is NORAD data sets.
+ undef: No spacetrack-type pragma was specified. The
+        content is something else.
+
+If the response object is not provided, it returns the data type
+from the last method call that returned an HTTP::Response object.
+
+=cut
+
+sub content_type {
+my $self = shift;
+return $self->{_content_type} unless @_;
+my $resp = shift;
+foreach ($resp->header ('Pragma')) {
+    m/spacetrack-type = (.+)/i and return $1;
+    }
+return;
+}
+
 
 =item $resp = $st->file ($name)
 
@@ -318,10 +360,14 @@ with the first five characters of each line containing the object ID,
 and the rest containing a name of the object. Lines whose first five
 characters do not look like a right-justified number will be ignored.
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 sub file {
 my $self = shift;
+delete $self->{_content_type};
 my $name = shift;
 ref $name and fileno ($name) and return $self->_handle_observing_list (<$name>);
 -e $name or return HTTP::Response->new (RC_NOT_FOUND, "Can't find file $name");
@@ -347,6 +393,7 @@ for what you can get().
 
 sub get {
 my $self = shift;
+delete $self->{_content_type};
 my $name = shift;
 croak "Attribute $name may not be set. Legal attributes are ",
 	join (', ', sort keys %mutator), ".\n"
@@ -365,6 +412,7 @@ convenient (to the author) to include.
 =cut
 
 sub help {
+delete $_[0]->{_content_type};
 HTTP::Response->new (RC_OK, undef, undef, <<eod);
 The following commands are defined:
   celestrak name
@@ -438,6 +486,7 @@ code set to RC_PRECONDITION_FAILED from HTTP::Status (a.k.a. 412).
 
 sub login {
 my $self = shift;
+delete $self->{_content_type};
 @_ and $self->set (@_);
 $self->{username} && $self->{password} or
     return HTTP::Response->new (
@@ -481,6 +530,7 @@ and the catalog name (suitable for inserting into a Tk Optionmenu).
 
 sub names {
 my $self = shift;
+delete $self->{_content_type};
 my $name = lc shift;
 $catalogs{$name} or return HTTP::Response (
 	RC_NOT_FOUND, "Data source '$name' not found.");
@@ -509,10 +559,14 @@ This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 sub retrieve {
 my $self = shift;
+delete $self->{_content_type};
 @_ = grep {m/^\d+$/} @_;
 @_ or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_CAT_ID);
 my $content = '';
@@ -541,6 +595,8 @@ while (@_) {
 $content or return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
 $resp->content ($content);
 $self->_convert_content ($resp);
+$self->{_content_type} = 'orbit';
+$resp->push_header (pragma => 'spacetrack-type = orbit');
 $resp;
 }
 
@@ -570,10 +626,14 @@ of lists). The first list reference contains the header text for all
 columns returned, and the subsequent list references contain the data
 for each match.
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 sub search_id {
 my $self = shift;
+delete $self->{_content_type};
 my $p = Astro::SpaceTrack::Parser->new ();
 @_ or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
 
@@ -632,10 +692,14 @@ of lists). The first list reference contains the header text for all
 columns returned, and the subsequent list references contain the data
 for each match.
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 sub search_name {
 my $self = shift;
+delete $self->{_content_type};
 my $p = Astro::SpaceTrack::Parser->new ();
 @_ or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
 
@@ -709,6 +773,7 @@ The following attributes may be set:
 
 sub set {
 my $self = shift;
+delete $self->{_content_type};
 croak "@{[__PACKAGE__]}->set (@{[join ', ', map {qq{'$_'}} @_]}) requires an even number of arguments"
     if @_ % 2;
 while (@_) {
@@ -870,10 +935,14 @@ This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
+If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
+added to the HTTP::Response object returned.
+
 =cut
 
 sub spacetrack {
 my $self = shift;
+delete $self->{_content_type};
 my $catnum = shift;
 $catnum =~ m/\D/ and do {
     my $info = $catalogs{spacetrack}{$catnum} or
@@ -897,6 +966,8 @@ $resp->is_success and do {
 ##	'content-length' => length ($resp->content),
 	);
     $self->_convert_content ($resp);
+    $self->{_content_type} = 'orbit';
+    $resp->push_header (pragma => 'spacetrack-type = orbit');
     };
 $resp;
 }
@@ -1251,6 +1322,13 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
  0.010 14-Oct-2005 T. R. Wyant
    Added the 'direct' attribute, to fetch elements
    directly from celestrak. And about time, too.
+ 0.011 30-Oct-2005 T. R. Wyant
+   Added 'Pragma: spacetrack-type = orbit' header to
+   the response for those methods that return orbital
+   elements, if the request in fact succeeded.
+   Added content_type() method to check for the above.
+   Played the CPANTS game.
+   Added "All rights reserved." to copyright statement.
 
 =head1 ACKNOWLEDGMENTS
 
@@ -1266,7 +1344,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 =head1 COPYRIGHT
 
 Copyright 2005 by Thomas R. Wyant, III
-(F<wyant at cpan dot org>)
+(F<wyant at cpan dot org>). All rights reserved.
 
 This module is free software; you can use it, redistribute it
 and/or modify it under the same terms as Perl itself.

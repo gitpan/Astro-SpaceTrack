@@ -26,7 +26,7 @@ return $input;
 }
 
 BEGIN {
-plan (tests => 9);
+plan (tests => 11);
 print "# Test 1 - Loading the library.\n"
 }
 
@@ -104,6 +104,10 @@ print "# Test $test_num - Retrieve some orbital elements.\n";
 skip ($skip, $skip || $st->retrieve (25544)->is_success);
 
 $test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip, $skip || $st->content_type eq 'orbit');
+
+$test_num++;
 print "# Test $test_num - Search for something by name.\n";
 skip ($skip, $skip || $st->search_name ('zarya')->is_success);
 
@@ -119,3 +123,7 @@ $test_num++;
 print "# Test $test_num - Direct-fetch a Celestrak data set.\n";
 $st->set (username => undef, password => undef, direct => 1);
 ok ($st->celestrak ('stations')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check content type of Celestrak data set.\n";
+ok ($st->content_type () eq 'orbit');
