@@ -83,7 +83,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = "0.011";
+$VERSION = "0.012";
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -171,6 +171,7 @@ my %mutator = (	# Mutators for the various attributes.
     cookie_expires => \&_mutate_attrib,
     direct => \&_mutate_attrib,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
+    max_range => \&_mutate_number,
     password => \&_mutate_attrib,
     session_cookie => \&_mutate_cookie,
     username => \&_mutate_attrib,
@@ -205,6 +206,7 @@ my $self = {
     banner => 1,	# shell () displays banner if true.
     cookie_expires => undef,
     dump_headers => 0,	# No dumping.
+    max_range => 500,	# Sanity limit on range size.
     password => undef,	# Login password.
     session_cookie => undef,
     username => undef,	# Login username.
@@ -453,6 +455,8 @@ The following commands are defined:
       dump_headers is unsupported, and intended for debugging -
         don't be suprised at anything it does, and don't rely
         on anything it does;
+      max_range = largest range of numbers that can be re-
+        trieved (default: 500);
       password = the Space-Track password;
       session_cookie = the text of the session cookie;
       username = the Space-Track username;
@@ -549,11 +553,21 @@ return ($resp, \@list);
 }
 
 
-=item $resp = $st->retrieve (number ...)
+=item $resp = $st->retrieve (number_or_range ...)
 
 This method retrieves the latest element set for each of the given
 catalog numbers. Non-numeric catalog numbers are ignored, as are
 (at a later stage) numbers that don't actually represent a satellite.
+
+Number ranges are represented as 'start-end', where both 'start' and
+'end' are catalog numbers. If 'start' > 'end', the numbers will be
+taken in the reverse order. Non-numeric ranges are ignored.
+
+In order not to load the Space Track web site too heavily, data are
+retrieved in batches of 50. Ranges will be subdivided and handled in
+more than one retrieval if necessary. To limit the damage done by a
+pernicious range, ranges greater than the max_range setting (which
+defaults to 500) will be ignored with a warning to STDERR.
 
 This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
@@ -564,16 +578,61 @@ added to the HTTP::Response object returned.
 
 =cut
 
+use constant RETRIEVAL_SIZE => 50;
+
 sub retrieve {
 my $self = shift;
 delete $self->{_content_type};
+
+=begin comment
+
 @_ = grep {m/^\d+$/} @_;
+
+=end comment
+
+=cut
+
+@_ = grep {m/^\d+(?:-\d+)?$/} @_;
+
 @_ or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_CAT_ID);
 my $content = '';
 local $_;
 my $resp;
 while (@_) {
+
+=begin comment
+
     my @batch = splice @_, 0, 50;
+
+=end comment
+
+=cut
+
+    my @batch;
+    my $ids = 0;
+    while (@_ && $ids < RETRIEVAL_SIZE) {
+	$ids++;
+	my ($lo, $hi) = split '-', shift @_;
+	defined $hi and do {
+	    ($lo, $hi) = ($hi, $lo) if $lo > $hi;
+	    $hi - $lo >= $self->{max_range} and do {
+		carp <<eod;
+Warning - Range $lo-$hi ignored because it is greater than the
+          currently-set maximum of $self->{max_range}.
+eod
+		next;
+		};
+	    $ids += $hi - $lo;
+	    $ids > RETRIEVAL_SIZE and do {
+		my $mid = $hi - $ids + RETRIEVAL_SIZE;
+		unshift @_, "@{[$mid + 1]}-$hi";
+		$hi = $mid;
+		};
+	    $lo = "$lo-$hi" if $hi > $lo;
+	    };
+	push @batch, $lo;
+	}
+    next unless @batch;
     $resp = $self->_post ('perl/id_query.pl',
 	ids => "@batch",
 	timeframe => 'latest',
@@ -706,6 +765,8 @@ my $p = Astro::SpaceTrack::Parser->new ();
 my @table;
 my %id;
 foreach my $name (@_) {
+# Note that the only difference between this and search_id is
+# the code from here vvvvvvvv
     my $resp = $self->_post ('perl/name_query.pl',
 	name => $name,
 	launch_year_start => 1957,
@@ -716,6 +777,7 @@ foreach my $name (@_) {
 	_submit => 'Submit',
 	_submitted => 1,
 	);
+# to here ^^^^^^^^^^^^^^^^
     return $resp unless $resp->is_success;
     my $content = $resp->content;
     next if $content =~ m/No results found/i;
@@ -750,24 +812,28 @@ The following attributes may be set:
  addendum text
    specifies text to add to the output of the banner() method.
  banner boolean
-   specifies whether or not the shell() method should emit the banner
-   text on invocation. True by default.
+   specifies whether or not the shell() method should emit the
+   banner text on invocation. True by default.
  cookie_expires number
-   specifies the expiration time of the cookie. You should only set
-   with a previously-retrieved value, which matches the cookie.
+   specifies the expiration time of the cookie. You should only
+   set with a previously-retrieved value, which matches the
+   cookie.
+ max_range number
+   specifies the maximum size of a range of numbers to be
+   retrieved.
  password text
    specifies the Space-Track password.
  session_cookie text
-   specifies the session cookie. You should only set this with a
-   previously-retrieved value.
+   specifies the session cookie. You should only set this with
+   a previously-retrieved value.
  username text
    specifies the Space-Track username.
  verbose boolean
    specifies verbose error messages. False by default.
  with_name boolean
-   specifies whether the returned element sets should include the
-   common name of the body (three-line format) or not (two-line
-   format). False by default.
+   specifies whether the returned element sets should include
+   the common name of the body (three-line format) or not
+   (two-line format). False by default.
 
 =cut
 
@@ -1165,6 +1231,17 @@ $_[0]->{agent}->cookie_jar->set_cookie (0, SESSION_KEY, $_[2],
 goto &_mutate_attrib;
 }
 
+#	_mutate_number croaks if the value to be set is not numeric.
+#	Otherwise it sets the value. Only unsigned integers pass.
+
+sub _mutate_number {
+$_[2] =~ m/\D/ and croak <<eod;
+Attribute $_[1] must be set to a numeric value.
+eod
+goto &_mutate_attrib;
+}
+
+
 #	_no_such_catalog takes as arguments a source and catalog name,
 #	and returns the appropriate HTTP::Response object based on the
 #	current verbosity setting.
@@ -1329,6 +1406,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Added content_type() method to check for the above.
    Played the CPANTS game.
    Added "All rights reserved." to copyright statement.
+ 0.012 04-Nov-2005 T. R. Wyant
+   Added support for number ranges in retrieve(), to
+   track support for these on www.space-track.org.
+   Added max_range attribute for sanity checking.
 
 =head1 ACKNOWLEDGMENTS
 

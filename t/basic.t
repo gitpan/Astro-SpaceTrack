@@ -26,7 +26,7 @@ return $input;
 }
 
 BEGIN {
-plan (tests => 11);
+plan (tests => 12);
 print "# Test 1 - Loading the library.\n"
 }
 
@@ -102,6 +102,10 @@ skip ($skip, $skip || $st->spacetrack ('special')->is_success);
 $test_num++;
 print "# Test $test_num - Retrieve some orbital elements.\n";
 skip ($skip, $skip || $st->retrieve (25544)->is_success);
+
+$test_num++;
+print "# Test $test_num - Retrieve a range of orbital elements.\n";
+skip ($skip, $skip || $st->retrieve ('25544-25546')->is_success);
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
