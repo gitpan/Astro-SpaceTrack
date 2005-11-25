@@ -83,7 +83,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = "0.012";
+$VERSION = "0.013";
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -97,6 +97,7 @@ use HTTP::Status qw{RC_NOT_FOUND RC_OK RC_PRECONDITION_FAILED
 use LWP::UserAgent;	# Not in the base.
 use POSIX qw{strftime};
 use Text::ParseWords;
+use Time::Local;
 use UNIVERSAL qw{isa};
 
 use constant COPACETIC => 'OK';
@@ -257,7 +258,8 @@ and you must abide by that site's restrictions, which include
 not making the data available to a third party without prior
 permission.
 
-Copyright 2005 T. R. Wyant (wyant at cpan dot org)
+Copyright 2005 T. R. Wyant (wyant at cpan dot org). All rights
+reserved.
 
 This module is free software; you can use it, redistribute it
 and/or modify it under the same terms as Perl itself.
@@ -383,13 +385,12 @@ return $self->_handle_observing_list (<$fh>)
 
 =item $resp = $st->get (attrib)
 
-This method returns an HTTP::Response object whose content is the value
+B<This method returns an HTTP::Response object> whose content is the value
 of the given attribute. If called in list context, the second element
 of the list is just the value of the attribute, for those who don't want
 to winkle it out of the response object. We croak on a bad attribute name.
 
-Since we currently have no read-only attributes, see the set() documentation
-for what you can get().
+See L</Attributes> for the names and functions of the attributes.
 
 =cut
 
@@ -466,6 +467,10 @@ The following commands are defined:
     only be set to previously-retrieved, matching values.
   source filename
     Executes the contents of the given file as shell commands.
+  spaceflight
+    Retrieves orbital elements from http://spaceflight.nasa.gov/.
+    No login needed, but you get at most the ISS and the current
+    shuttle mission.
   spacetrack name
     Retrieves the named catalog of orbital elements from
     Space Track.
@@ -803,37 +808,11 @@ but other methods as noted may call it implicitly also. It croaks if
 you give it an odd number of arguments, or if given an attribute that
 either does not exist or cannot be set.
 
-For the convenience of the shell method, we return a HTTP::Response
-object with a success status if all goes well. But if we encounter
-an error we croak.
+For the convenience of the shell method we return a HTTP::Response
+object with a success status if all goes well. But if we encounter an
+error we croak.
 
-The following attributes may be set:
-
- addendum text
-   specifies text to add to the output of the banner() method.
- banner boolean
-   specifies whether or not the shell() method should emit the
-   banner text on invocation. True by default.
- cookie_expires number
-   specifies the expiration time of the cookie. You should only
-   set with a previously-retrieved value, which matches the
-   cookie.
- max_range number
-   specifies the maximum size of a range of numbers to be
-   retrieved.
- password text
-   specifies the Space-Track password.
- session_cookie text
-   specifies the session cookie. You should only set this with
-   a previously-retrieved value.
- username text
-   specifies the Space-Track username.
- verbose boolean
-   specifies verbose error messages. False by default.
- with_name boolean
-   specifies whether the returned element sets should include
-   the common name of the body (three-line format) or not
-   (two-line format). False by default.
+See L</Attributes> for the names and functions of the attributes.
 
 =cut
 
@@ -977,6 +956,77 @@ sub source {
 my $self = shift if UNIVERSAL::isa $_[0], __PACKAGE__;
 $self ||= Astro::SpaceTrack->new ();
 $self->shell ($self->_source (@_), 'exit');
+}
+
+
+=item $resp = $st->spaceflight ()
+
+This method downloads current orbital elements from NASA's human
+spaceflight site, L<http://spaceflight.nasa.gov/>. As of November 2005
+you get the International Space Station. An attempt is made to get the
+current Space Shuttle mission if any, but as there is no way to test
+this unless there is a mission in progress, whether this works is
+anybody's guess.
+
+No Space Track account is needed to access this data, even if the
+'direct' attribute is false. But if the 'direct' attribute is true,
+the setting of the 'with_name' attribute is ignored.
+
+This method is a web page scraper. any change in the location of the
+web pages, or any substantial change in their format, will break this
+method.
+
+
+=cut
+
+sub spaceflight {
+my $self = shift;
+delete $self->{_content_type};
+my $content = '';
+my $now = time ();
+foreach my $url (
+	'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/ISS/SVPOST.html',
+	'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/SHUTTLE/SVPOST.html',
+	) {
+    my $resp = $self->{agent}->get ($url);
+    return $resp unless $resp->is_success;
+    my ($tle, @data, $epoch, $acquire);
+    foreach (split '\n', $resp->content) {
+	chomp;
+	m/TWO LINE MEAN ELEMENT SET/ and do {
+	    $acquire = 1;
+	    @data = ();
+	    next;
+	    };
+	next unless $acquire;
+	s/^\s+//;
+	$_ and do {push @data, "$_\n"; next};
+	@data and do {
+	    $acquire = undef;
+	    @data == 2 || @data == 3 or next;
+	    shift @data
+		if @data == 3 && !$self->{direct} && !$self->{with_name};
+	    my $yr = substr ($data[@data - 2], 18, 2);
+	    my $da = substr ($data[@data - 2], 20, 12);
+	    $yr += 100 if $yr < 57;
+	    my $ep = timegm (0, 0, 0, 1, 0, $yr) + ($da - 1) * 86400;
+	    next if $ep > $now;
+	    next if defined $epoch && $ep < $epoch;
+	    $tle = join '', @data;
+	    @data = ();
+	    $epoch = $ep;
+	    };
+	}
+    $content .= $tle if $tle;
+    }
+
+$content or
+    return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_CAT_ID);
+
+my $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+$self->{_content_type} = 'orbit';
+$resp->push_header (pragma => 'spacetrack-type = orbit');
+$resp;
 }
 
 
@@ -1312,6 +1362,88 @@ __END__
 
 =back
 
+=head2 Attributes
+
+The following attributes may be modified by the user to affect the
+operation of the Astro::SpaceTrack object. The data type of each is
+given in parentheses after the attribute name.
+
+Boolean attributes are typically set to 1 for true, and 0 for false.
+
+=over
+
+=item addendum (text)
+
+This attribute specifies text to add to the output of the banner()
+method.
+
+The default is an empty string.
+
+=item banner (boolean)
+
+This attribute specifies whether or not the shell() method should emit
+the banner text on invocation.
+
+The default is true.
+
+=item cookie_expires (number)
+
+This attribute specifies the expiration time of the cookie. You should
+only set this attribute with a previously-retrieved value, which
+matches the cookie.
+
+=item direct (boolean)
+
+This attribute specifies that orbital elements should be fetched
+directly from the redistributor if possible. At the moment the only
+methods affected by this are celestrak() and spaceflight().
+
+The default is false.
+
+=item max_range (number)
+
+This attribute specifies the maximum size of a range of NORAD IDs to be
+retrieved. Its purpose is to impose a sanity check on the use of the
+range functionality.
+
+The default is 500.
+
+=item password (text)
+
+This attribute specifies the Space-Track password.
+
+The default is an empty string.
+
+=item session_cookie (text)
+
+This attribute specifies the session cookie. You should only set it
+with a previously-retrieved value.
+
+The default is an empty string.
+
+=item username (text)
+
+This attribute specifies the Space-Track username.
+
+The default is an empty string.
+
+verbose (boolean)
+
+This attribute specifies verbose error messages.
+
+The default is false.
+
+=item with_name (boolean)
+
+This attribute specifies whether the returned element sets should
+include the common name of the body (three-line format) or not
+(two-line format). It is ignored if the 'direct' attribute is true;
+in this case you get whatever the redistributor provides.
+
+The default is false.
+
+=back
+
 =head1 ENVIRONMENT
 
 The following environment variables are recognized by Astro::SpaceTrack.
@@ -1355,6 +1487,8 @@ This software is essentially a web page scraper, and relies on the
 stability of the user interface to Space Track. The Celestrak
 portion of the functionality relies on the presence of .txt files
 named after the desired data set residing in the expected location.
+The Human Space Flight portion of the functionality relies on the
+stability of the layout of the relevant web pages.
 
 This software has not been tested under a HUGE number of operating
 systems, Perl versions, and Perl module versions. It is rather likely,
@@ -1410,6 +1544,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Added support for number ranges in retrieve(), to
    track support for these on www.space-track.org.
    Added max_range attribute for sanity checking.
+ 0.013 21-Nov-2005 T. R. Wyant
+   Added spaceflight() method.
+   Added "All rights reserved." to banner() output.
+   Spiffed up the documentation.
 
 =head1 ACKNOWLEDGMENTS
 

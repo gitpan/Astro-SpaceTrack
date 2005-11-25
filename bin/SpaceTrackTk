@@ -3,6 +3,11 @@
 #	Author:	T. R. Wyant
 #	Date:	07-Mar-2005
 #	Modified:
+#		24-Nov-2005	T. R. Wyant
+#			Added login bypass ('direct' support).
+#			Added spaceflight() support.
+#			Added version.
+#			Added POD.
 #	Remarks:
 #		This Perl script provides a Perl/Tk interface to the
 #		Astro::SpaceTrack package. Command arguments are passed to
@@ -11,13 +16,15 @@
 #		to initialize your session.
 #
 #		Copyright 2005 by Thomas R. Wyant, III
-#		(wyant at cpan dot org)
+#		(wyant at cpan dot org). All rights reserved.
 
 use strict;
 use warnings;
 
 use Astro::SpaceTrack;
 use Tk;
+
+our $VERSION = '0.013';
 
 my @pad = qw{-padx 5 -pady 5};
 
@@ -31,7 +38,7 @@ my $banner = !$st->get ('banner')->content;
 
 sub banner {
 my $mw = MainWindow->new (-title => 'Front Matter');
-my $text = $st->banner->content;
+my $text = "SpaceTrackTk $VERSION" . $st->banner->content;
 $text =~ s/^\s+//s;
 $text =~ s/[\s\n]+$//s;
 $mw->Label (-text => $text)->pack (-side => 'top', @pad);
@@ -43,8 +50,7 @@ MainLoop;
 1;
 }
 
-$rslt = $st->login ();
-unless ($rslt && $rslt->is_success) {
+unless ($st->get ('direct')->content || ($rslt = $st->login ()) && $rslt->is_success) {
 
     $banner ||= banner ();
 
@@ -61,8 +67,9 @@ unless ($rslt && $rslt->is_success) {
     $mw->Entry (-relief => 'sunken', -textvariable => \$pwd, -show => '*')
 	->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
     $row++; $col = 0;
-    $mw->Button (-text => 'Log in', -command => sub {
-	$rslt = $st->login (username => $user, password => $pwd);
+    my $bf = $mw->Frame->grid (-row => $row, -column => 0, -columnspan => 2, -sticky => 'ew');
+    $bf->Button (-text => 'Log in', -command => sub {
+	$rslt = $st->login (direct => 0, username => $user, password => $pwd);
 	$rslt->is_success and do {
 	    $mw->destroy;
 	    return;
@@ -74,13 +81,18 @@ unless ($rslt && $rslt->is_success) {
 	    return;
 	    };
 	})
-	->grid (-row => $row, -column => $col, -columnspan => 2, @pad);
+	->grid (-row => 0, -column => $col++, @pad);
+    $bf->Button (-text => 'Skip login', -command => sub {
+	$st->set (direct => 1);
+	$mw->destroy;
+	})
+	->grid (-row => 0, -column => $col++, @pad);
 
     MainLoop;
 
     }
 
-exit unless $rslt && $rslt->is_success;
+exit unless $st->get ('direct')->content || $rslt && $rslt->is_success;
 
 $banner ||= banner ();
 
@@ -124,14 +136,20 @@ my %dsxfrm = (
 $row = $col = 0;
 $mw->Label (-text => 'Object ID source:')
 	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$mw->Optionmenu (-options => [
-	['Celestrak catalog' => 'celestrak'],
-	['Space Track catalog' => 'spacetrack'],
-	['Local file catalog' => 'file'],
-	['Space Track name lookup' => 'search_name'],
-	['Space Track international designator lookup' => 'search_id'],
-	['Space Track satellite IDs' => 'retrieve'],
-    ], -variable => \$command, -command => sub {
+$mw->Optionmenu (-options =>
+	([  ['Celestrak catalog' => 'celestrak'],
+	    ['Space Track catalog' => 'spacetrack'],
+	    ['Human Space Flight data' => 'spaceflight'],
+	    ['Local file catalog' => 'file'],
+	    ['Space Track name lookup' => 'search_name'],
+	    ['Space Track international designator lookup' => 'search_id'],
+	    ['Space Track satellite IDs' => 'retrieve'],
+	    ],
+	 [  ['Celestrak catalog' => 'celestrak'],
+	    ['Human Space Flight data' => 'spaceflight'],
+	    ],
+	)[$st->get ('direct')->content ? 1 : 0],
+    -variable => \$command, -command => sub {
 	$current and $current->gridForget ();
 	$label = $dslbl{$command};
 	$current = $dswdgt{$command} or return;
@@ -145,14 +163,20 @@ $mw->Label (-textvariable => \$label)
 $current = $dswdgt{$command};
 $current->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
 
-$row++; $col = 0;
-$mw->Label (-text => 'Include common names:')
+if ($st->get ('direct')->content) {
+    $names = 0;
+    $st->set (with_name => $names);
+    }
+  else {
+    $row++; $col = 0;
+    $mw->Label (-text => 'Include common names:')
 	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$mw->Checkbutton (-variable => \$names, -relief => 'flat', -command => sub {
+    $mw->Checkbutton (-variable => \$names, -relief => 'flat', -command => sub {
 	$st->set (with_name => $names);
 	})
 	->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-$names = !!$st->get ('with_name')->content;
+    $names = !!$st->get ('with_name')->content;
+    }
 
 $row++; $col = 0;
 my $bf = $mw->Frame->grid (-row => $row, -column => 0, -columnspan => 2, -sticky => 'ew');
@@ -167,7 +191,7 @@ $bf->Button (-text => 'View data ...', -command => sub {
 		$dsdata{$command});
 	if ($rslt->is_success) {
 	    $tx->insert ('0.0', $rslt->content);
-	    $vw->title ("$command $dsdata{$command}");
+	    $vw->title ($dsdata{$command} ? "$command $dsdata{$command}" : $command);
 	    }
 	  else {
 	    $mw->messageBox (-icon => 'error', -type => 'OK',
@@ -200,34 +224,83 @@ $bf->Button (-text => 'Save data ...', -command => sub {
 	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
 ##	->grid (-row => $row, -column => $col++, @pad);
 
-=pod
+MainLoop;
 
-$mw->Button (-text => 'Exit', -command => sub {$mw->destroy})
-	->grid (-row => $row, -column => $col++, @pad);
-$mw->Button (-text => 'Save data ...', -command => sub {
-	my $file = $mw->getSaveFile (-filetypes => [
-		['Text files', '.txt', 'TEXT'],
-		['All files', '*'],
-		], -initialfile => $dsdata{$command},
-		-defaultextension => '.txt');
-	return unless defined $file && $file ne '';
-	$rslt = $st->$command ($dsxfrm{$command} ?
-		($dsxfrm{$command}->($dsdata{$command})) :
-		$dsdata{$command});
-	if ($rslt->is_success) {
-	    my $fh;
-	    $fh = FileHandle->new (">$file")
-		and print $fh $rslt->content
-		or $mw->messageBox (-icon => 'error', -type => 'OK',
-		-title => 'File open error', -message => $!);
-	    }
-	  else {
-	    $mw->messageBox (-icon => 'error', -type => 'OK',
-		-title => 'Data fetch error', -message => $rslt->status_line);
-	    }
-	})
-	->grid (-row => $row, -column => $col++, @pad);
+__END__
+
+=head1 NAME
+
+SpaceTrackTk - Perl/Tk application to fetch satellite orbit data.
+
+=head1 SYNOPSIS
+
+This application provides a windowed interface to the Astro::SpaceTrack
+module, based on the Perl/Tk windowing system. All you do is issue the
+command
+
+ $ SpaceTrackTk
+
+You will be presented with a splash screen, followed by a login window.
+In order to get full functionality, you must have a Space Track
+account. It is the username and password of this account that you enter
+into the login screen.
+
+You have the option to skip the login. This gives you reduced
+functionality, since you are limited to the data provided by
+redistributers known to Astro::SpaceTrack. The reduced functionality
+is apparent in two ways:
+
+* The Space Track sources do not appear in the "Object ID source" drop
+list.
+
+* The "Include common names" checkbox does not appear on the retrieval
+window, since you get whatever the redistributor provides.
+
+=head1 ENVIRONMENT
+
+If SPACETRACK_OPT sets direct to 1, the login screen is skipped, and
+the functionality is as though you skipped the login (i.e. reduced).
+Otherwise, if a username and password are available from either
+SPACETRACK_USER or SPACETRACK_OPT, you are logged in automatically
+and the login screen is skipped.
+
+Please see L<Astro::SpaceTrack> for the details.
+
+=head1 MODIFICATIONS
+
+ (no version) T. R. Wyant
+   initial release.
+ 0.013 24-Nov-2005 T. R. Wyant
+   Added version.
+   Added support for direct-fetching of data.
+   Added ability to skip login.
+   Added POD.
+
+=head1 ACKNOWLEDGMENTS
+
+The author wishes to thank Dr. T. S. Kelso of
+L<http://celestrak.com/> and the staff of L<http://www.space-track.org/>
+(whose names are unfortunately unknown to me) for their co-operation,
+assistance and encouragement in the development of the Astro::SpaceTrack
+module.
+
+=head1 AUTHOR
+
+Thomas R. Wyant, III (F<wyant at cpan dot org>)
+
+=head1 COPYRIGHT
+
+Copyright 2005 by Thomas R. Wyant, III
+(F<wyant at cpan dot org>). All rights reserved.
+
+This script is free software; you can use it, redistribute it
+and/or modify it under the same terms as Perl itself.
+
+The data obtained by this script is subject to the Space
+Track user agreement (L<http://www.space-track.org/perl/user_agreement.pl>).
+
+This software is provided without any warranty of any kind, express or
+implied. The author will not be liable for any damages of any sort
+relating in any way to this software.
 
 =cut
-
-MainLoop;
