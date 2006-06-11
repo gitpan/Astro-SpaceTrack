@@ -52,7 +52,7 @@ restrictions, which include not making the data available to a
 third party.
 
 In addition, the celestrak method queries L<http://celestrak.com/> for
-a named data set, and then queries L<http://www.space-track.org> for
+a named data set, and then queries L<http://www.space-track.org/> for
 the orbital elements of the objects in the data set.
 
 Beginning with version 0.017, there is provision for retrieval of
@@ -86,7 +86,7 @@ package Astro::SpaceTrack;
 use base qw{Exporter};
 use vars qw{$VERSION @EXPORT_OK};
 
-$VERSION = "0.018";
+$VERSION = "0.019";
 @EXPORT_OK = qw{shell};
 
 use Astro::SpaceTrack::Parser;
@@ -387,6 +387,8 @@ HTTP::Response from login ().
 If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
 added to the HTTP::Response object returned.
 
+You can specify the L</retrieve> options on this method as well.
+
 =cut
 
 # Help for syntax-highlighting editor that does not understand POD '
@@ -398,6 +400,10 @@ my %valid_type = ('text/plain' => 1, 'text/text' => 1);
 sub celestrak {
 my $self = shift;
 delete $self->{_content_type};
+
+@_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
+my $opt = shift;
+
 my $name = shift;
 my $resp = $self->{direct} ?
     $self->{agent}->get ("http://celestrak.com/NORAD/elements/$name.txt") :
@@ -415,7 +421,7 @@ if ($self->{direct}) {
     return $resp;
     }
   else {
-    return $self->_handle_observing_list ($resp->content);
+    return $self->_handle_observing_list ($opt, $resp->content);
     }
 }
 
@@ -472,10 +478,16 @@ characters do not look like a right-justified number will be ignored.
 If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
 added to the HTTP::Response object returned.
 
+You can specify the L</retrieve> options on this method as well.
+
 =cut
 
 sub file {
 my $self = shift;
+
+@_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
+my $opt = shift;
+
 delete $self->{_content_type};
 my $name = shift;
 ref $name and fileno ($name) and return $self->_handle_observing_list (<$name>);
@@ -484,7 +496,7 @@ my $fh = FileHandle->new ($name) or
     return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR, "Can't open $name: $!");
 local $/;
 $/ = undef;
-return $self->_handle_observing_list (<$fh>)
+return $self->_handle_observing_list ($opt, <$fh>)
 }
 
 
@@ -1533,6 +1545,10 @@ $cgi and substr ($cgi, 0, 1) = '?';
 sub _handle_observing_list {
 my $self = shift;
 my (@catnum, @data);
+
+@_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
+my $opt = shift;
+
 foreach (map {split '\n', $_} @_) {
     s/\s+$//;
     my ($id) = m/^([\s\d]{5})/ or next;
@@ -1540,7 +1556,7 @@ foreach (map {split '\n', $_} @_) {
     push @catnum, $id;
     push @data, [$id, substr $_, 5];
     }
-my $resp = $self->retrieve (sort {$a <=> $b} @catnum);
+my $resp = $self->retrieve ($opt, sort {$a <=> $b} @catnum);
 if ($resp->is_success) {
     unless ($self->{_content_type}) {
 	$self->{_content_type} = 'orbit';
@@ -1890,6 +1906,8 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
    Added retrieve() options.
  0.018 30-May-2006 T. R. Wyant
    Added amsat() method.
+ 0.019 11-Jun-2006 T. R. Wyant
+   Added the retrieve() options to celestrak() and file().
 
 =head1 ACKNOWLEDGMENTS
 
