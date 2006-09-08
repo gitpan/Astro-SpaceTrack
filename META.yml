@@ -1,8 +1,8 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Astro-SpaceTrack
-version:      0.022
-version_from: SpaceTrack.pm
+version:      0.023
+version_from: lib/Astro/SpaceTrack.pm
 installdirs:  site
 requires:
     LWP::UserAgent:                0

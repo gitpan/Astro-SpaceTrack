@@ -4,17 +4,26 @@ use strict;
 use warnings;
 
 use Config;
-use ExtUtils::MakeMaker qw{WriteMakefile prompt};
 use FileHandle;
-use Getopt::Std;
+use Module::Build;
 
-my %opt;
-getopts ('ny', \%opt) or die <<eod;
-The only legal options are
-  -n = answer all questions 'no'.
-  -y = answer all questions 'yes'.
-You may not assert both of these at once - it's too confusing.
-eod
+my $bldr = Module::Build->new (
+	dist_author => 'Tom Wyant (wyant at cpan dot org)',
+	dist_abstract => 'Download satellite orbital elements from Space Track',
+	module_name => 'Astro::SpaceTrack',
+##	dist_name => 'Astro-SpaceTrack',
+##	dist_version_from => 'SpaceTrack.pm',
+
+	get_options => {y => {}, n => {}},
+##	pm_files => {
+##	    'SpaceTrack.pm' => 'lib/Astro/SpaceTrack.pm',
+##	    'SpaceTrack/Parser.pm' => 'lib/Astro/SpaceTrack/Parser.pm',
+##	    },
+	dynamic_config => 1,
+	license => 'perl',
+	);
+
+my %opt => $bldr->args ();
 
 my @exe_files;
 my @clean_files;
@@ -40,7 +49,7 @@ installed. If you want this, install Tk and then rerun Makefile.PL.
 eod
 print <<eod;
 
-If you do not want this, run Makefile.PL with the -n option.
+If you do not want this, run Build.PL with the -n option.
 
 Unless you are running MSWin32 or VMS (which are special-cased),
 I will assume you're running some version of U*ix, and behave
@@ -95,23 +104,9 @@ eod
 ##my $vers = $] >= 5.008 ? '-5.8' : '';
 my $vers = '';
 
-WriteMakefile (
-	NAME => 'Astro::SpaceTrack',
-	VERSION_FROM => 'lib/Astro/SpaceTrack.pm',
-	PREREQ_PM => {
-			$^O eq 'MSWin32' ? () : (
-				'LWP::UserAgent' => 0,
-				)
-				
-			},
-	EXE_FILES => \@exe_files,
-#	'linkext' => {LINKTYPE => ''},
-	'dist' => {COMPRESS => 'gzip', SUFFIX => 'gz'},
-	realclean => {FILES => join ' ', @clean_files},
-	$] >= 5.005 ? (
-		AUTHOR => 'Tom Wyant (wyant at cpan dot org)',
-		ABSTRACT => 'Download satellite orbital elements from Space Track',
-		BINARY_LOCATION => "$Config{archname}$vers/Astro-SpaceTrack.tar.gz",
-		) : (),
-	);
+$bldr->requires ($^O eq 'MSWin32' ? {} : {'LWP::UserAgent' => 0});
+$bldr->add_to_cleanup (\@clean_files);
+$bldr->script_files (\@exe_files);
+
+$bldr->create_build_script ();
 

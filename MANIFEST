@@ -1,12 +1,14 @@
+Build.PL
+Changes
+Makefile.PL
+MANIFEST
+README
 bin/SpaceTrack
 bin/SpaceTrackTk
-Changes
-MANIFEST
-Makefile.PL
-SpaceTrack.pm
-SpaceTrack/Parser.pm
-README
+lib/Astro/SpaceTrack.pm
+lib/Astro/SpaceTrack/Parser.pm
 t/basic.t
 t/pod.t
 t/pod_coverage.t
-META.yml                                 Module meta-data (added by MakeMaker)
+t/pod_spelling.t
+META.yml
