@@ -5,10 +5,12 @@ MANIFEST
 README
 bin/SpaceTrack
 bin/SpaceTrackTk
+eg/README
+eg/celestrak
+eg/spaceflight
 lib/Astro/SpaceTrack.pm
 lib/Astro/SpaceTrack/Parser.pm
 t/basic.t
 t/pod.t
 t/pod_coverage.t
-t/pod_spelling.t
 META.yml
