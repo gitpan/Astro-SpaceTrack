@@ -88,7 +88,7 @@ package Astro::SpaceTrack;
 
 use base qw{Exporter};
 
-our $VERSION = '0.024';
+our $VERSION = '0.025';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -687,7 +687,7 @@ data. The possible status values are:
 
     '[S]' - Spare;
     '[-]' - Tumbling (or otherwise unservicable);
-    '' - In service and able to produce predictable flares.
+    '[+]' - In service and able to produce predictable flares.
 
 The comment will be 'Spare', 'Tumbling', or '' depending on the status.
 
@@ -753,6 +753,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 	    mccants => {
 		'[S]' => '?',	# spare
 		'[-]' => 'tum',	# tumbling
+		'[+]' => '',	# operational
 		},
 	    },
 	);
@@ -761,6 +762,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 	    ''	=> BODY_STATUS_IS_OPERATIONAL,
 	    '[-]' => BODY_STATUS_IS_TUMBLING,
 	    '[S]' => BODY_STATUS_IS_SPARE,
+	    '[+]' => BODY_STATUS_IS_OPERATIONAL,
 	},
 	mccants => {
 	    '' => BODY_STATUS_IS_OPERATIONAL,
@@ -2267,6 +2269,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
     No substantive changes to this module, but retracted
       t/pod_spelling.t, and tried to make Build.PL work with
       ActiveState's build system.
+ 0.025 19-Oct-2006 T. R. Wyant
+    Recognize new Kelso Iridium status '[+]' = working.
+    Make Makefile.PL not run Build.PL with old MakeMaker.
+    Retract kluge to Build.PL, which is no longer needed.
 
 =head1 ACKNOWLEDGMENTS
 
