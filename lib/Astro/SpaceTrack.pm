@@ -82,7 +82,7 @@ package Astro::SpaceTrack;
 
 use base qw{Exporter};
 
-our $VERSION = '0.029';
+our $VERSION = '0.030';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -120,6 +120,7 @@ use constant SESSION_KEY => 'spacetrack_session';
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
+	sts => {name => 'Current Space Shuttle Mission (if any)'},
 	'tle-new' => {name => "Last 30 Days' Launches"},
 	stations => {name => 'International Space Station'},
 	visual => {name => '100 (or so) brightest'},
@@ -427,16 +428,23 @@ is 'stations', since the URL for this is
 L<http://celestrak.com/NORAD/elements/stations.txt>.
 
 As of October 11 2007, the data set for the debris from the People's
-Republic of China's anti-satellite test is available from Celestrak only
-by direct-fetching ($st->set (direct => 1), see below), as data set
-'1999-025'. I have not corresponded with Dr. Kelso on this, but I think
-it reasonable to believe that the effect of asking Space Track for all
-2126 pieces of debris at once would not be good.
+Republic of China's anti-satellite test against their Fengyun 1C
+satellite is available from Celestrak only by direct-fetching ($st->set
+(direct => 1), see below), as data set '1999-025'. I have not
+corresponded with Dr. Kelso on this, but I think it reasonable to
+believe that the effect of asking Space Track for all 2126 pieces of
+debris at once would not be good.
+
+The data set for the current US Space Shuttle Mission (if any) will be
+available as data set 'sts'. If there is no current mission, you will
+get a 404 error with text "Missing Celestrak catalog 'sts'." Since the
+data ultimately come from NORAD, the shuttle will have to be up and
+actually tracked by NORAD before this is available.
 
 If the 'direct' attribute is true, or if the 'fallback' attribute is
 true and the data are not available from Space Track, the elements will
 be fetched directly from Celestrak, and no login is needed. Otherwise,
-This method implicitly calls the login () method if the session cookie
+this method implicitly calls the login () method if the session cookie
 is missing or expired, and returns the SpaceTrack data for the OIDs
 fetched from Celestrak. If login () fails, you will get the
 HTTP::Response from login ().
@@ -1954,11 +1962,11 @@ goto &_mutate_attrib;
 #	and returns the appropriate HTTP::Response object based on the
 #	current verbosity setting.
 
-my %no_such_lead = (
-    celestrak => "No such CelesTrak catalog as '%s'.",
-    spaceflight => "No such Manned Spaceflight catalog as '%s'.",
-    spacetrack => "No such Space Track catalog as '%s'.",
-    );
+my %no_such_name = (
+    celestrak => 'CelesTrak',
+    spaceflight => 'Manned Spaceflight',
+    spacetrack => 'Space Track',
+);
 my %no_such_trail = (
     spacetrack => <<eod,
 The Space Track data sets are actually numbered. The given number
@@ -1972,9 +1980,10 @@ sub _no_such_catalog {
 my $self = shift;
 my $source = lc shift;
 my $catalog = shift;
-$no_such_lead{$source} or return HTTP::Response->new (RC_NOT_FOUND,
-	"No such data source as '$source'.\n");
-my $lead = sprintf $no_such_lead{$source}, $catalog;
+my $name = $no_such_name{$source} || $source;
+my $lead = $catalogs{$source}{$catalog} ?
+    "Missing $name catalog '$catalog'." :
+    "No such $name catalog as '$catalog'.";
 return HTTP::Response->new (RC_NOT_FOUND, "$lead\n")
     unless $self->{verbose};
 my $resp = $self->names ($source);
@@ -2521,6 +2530,10 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
      Have 'shell' method interpret 'show' as 'get', and special-case
 	 'get' without arguments to display all attributes. Document
 	 this.
+ 0.030 24-Oct-2007 T. R. Wyant
+     Add Celestrak 'sts' data set name to catalog.
+     Different error text for data sets in catalog but 404 and data sets
+	 not in catalog and 404.
 
 =head1 ACKNOWLEDGMENTS
 
