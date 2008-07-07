@@ -82,7 +82,7 @@ package Astro::SpaceTrack;
 
 use base qw{Exporter};
 
-our $VERSION = '0.031';
+our $VERSION = '0.032';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -106,6 +106,8 @@ use Time::Local;
 use UNIVERSAL qw{isa};
 
 use constant COPACETIC => 'OK';
+use constant BAD_SPACETRACK_RESPONSE =>
+	'Unable to parse SpaceTrack response';
 use constant INVALID_CATALOG =>
 	'Catalog name %s invalid. Legal names are %s.';
 use constant LOGIN_FAILED => 'Login failed';
@@ -2180,6 +2182,9 @@ foreach my $name (@_) {
     my $content = $resp->content;
     next if $content =~ m/No results found/i;
     my @this_page = @{$p->parse_string (table => $content)};
+    ref $this_page[0] eq 'ARRAY'
+	or return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
+	BAD_SPACETRACK_RESPONSE, undef, $content);
     my @data = @{$this_page[0]};
     foreach my $row (@data) {
 	pop @$row; pop @$row;
@@ -2548,6 +2553,8 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
      Enhance ExtUtils::MakeMaker version detection in Makefile.PL,
          since ActiveState is apparantly deploying a Perl 5.10
 	 with a development version of that module.
+ 0.032 06-Jul-2008 T. R. Wyant
+     More graceful failure when unable to parse Space Track data.
 
 =head1 ACKNOWLEDGMENTS
 
@@ -2562,7 +2569,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
 =head1 COPYRIGHT
 
-Copyright 2005, 2006, 2007 by Thomas R. Wyant, III
+Copyright 2005, 2006, 2007, 2008 by Thomas R. Wyant, III
 (F<wyant at cpan dot org>). All rights reserved.
 
 =head1 LICENSE
