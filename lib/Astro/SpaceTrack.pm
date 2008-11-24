@@ -51,7 +51,14 @@ third party.
 
 In addition, the celestrak method queries L<http://celestrak.com/> for
 a named data set, and then queries L<http://www.space-track.org/> for
-the orbital elements of the objects in the data set.
+the orbital elements of the objects in the data set. This method may not
+require a Space Track username and password, depending on how you have
+the Astro::SpaceTrack object configured. See the documentation on this
+method for the details.
+
+Other methods (amsat(), spaceflight() ...) have been added to access
+other repositories of orbital data, and in general these do not require
+a Space Track username and password.
 
 Beginning with version 0.017, there is provision for retrieval of
 historical data.
@@ -63,7 +70,8 @@ exported if you so desire.
 Most methods return an HTTP::Response object. See the individual
 method document for details. Methods which return orbital data on
 success add a 'Pragma: spacetrack-type = orbit' header to the
-HTTP::Response object if the request succeeds.
+HTTP::Response object if the request succeeds, and a 'Pragma:
+spacetrack-source =' header to specify what source the data came from.
 
 =head2 Methods
 
@@ -82,7 +90,7 @@ package Astro::SpaceTrack;
 
 use base qw{Exporter};
 
-our $VERSION = '0.033';
+our $VERSION = '0.034';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -103,7 +111,6 @@ use LWP::UserAgent;	# Not in the base.
 use POSIX qw{strftime};
 use Text::ParseWords;
 use Time::Local;
-use UNIVERSAL qw{isa};
 
 use constant COPACETIC => 'OK';
 use constant BAD_SPACETRACK_RESPONSE =>
@@ -326,7 +333,11 @@ weekly.
 
 No Space Track account is needed to access this data, even if the
 'direct' attribute is false. But if the 'direct' attribute is true,
-the setting of the 'with_name' attribute is ignored.
+the setting of the 'with_name' attribute is ignored. On a successful
+return, the response object will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = amsat
 
 This method is a web page scraper. any change in the location of the
 web page will break this method.
@@ -335,7 +346,7 @@ web page will break this method.
 
 sub amsat {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 my $content = '';
 my $now = time ();
 foreach my $url (
@@ -358,8 +369,10 @@ $content or
     return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_CAT_ID);
 
 my $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
-$self->{_content_type} = 'orbit';
-$resp->push_header (pragma => 'spacetrack-type = orbit');
+$self->_add_pragmata($resp,
+    'spacetrack-type' => 'orbit',
+    'spacetrack-source' => 'amsat',
+);
 $self->_dump_headers ($resp) if $self->{dump_headers};
 $resp;
 }
@@ -396,8 +409,8 @@ and you must abide by that site's restrictions, which include
 not making the data available to a third party without prior
 permission.
 
-Copyright 2005, 2006, 2007 T. R. Wyant (wyant at cpan dot org). All
-rights reserved.
+Copyright 2005, 2006, 2007, 2008 T. R. Wyant (wyant at cpan dot org).
+All rights reserved.
 
 This module is free software; you can use it, redistribute it
 and/or modify it under the same terms as Perl itself.
@@ -418,6 +431,14 @@ aforementioned HTTP::Response object, and the second element is a
 list reference to list references  (i.e. a list of lists). Each
 of the list references contains the catalog ID of a satellite or
 other orbiting body and the common name of the body.
+
+If the 'direct' attribute is true, or if the 'fallback' attribute is
+true and the data are not available from Space Track, the elements will
+be fetched directly from Celestrak, and no login is needed. Otherwise,
+this method implicitly calls the login () method if the session cookie
+is missing or expired, and returns the SpaceTrack data for the OIDs
+fetched from Celestrak. If login () fails, you will get the
+HTTP::Response from login ().
 
 A list of valid names and brief descriptions can be obtained by calling
 $st->names ('celestrak'). If you have set the 'verbose' attribute true
@@ -447,16 +468,16 @@ get a 404 error with text "Missing Celestrak catalog 'sts'." Since the
 data ultimately come from NORAD, the shuttle will have to be up and
 actually tracked by NORAD before this is available.
 
-If the 'direct' attribute is true, or if the 'fallback' attribute is
-true and the data are not available from Space Track, the elements will
-be fetched directly from Celestrak, and no login is needed. Otherwise,
-this method implicitly calls the login () method if the session cookie
-is missing or expired, and returns the SpaceTrack data for the OIDs
-fetched from Celestrak. If login () fails, you will get the
-HTTP::Response from login ().
+If this method succeeds, the response will contain headers
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = 
+
+The spacetrack-source will be 'spacetrack' if the TLE data actually came
+from Space Track, or 'celestrak' if the TLE data actually came from
+Celestrak. The former will be the case if the 'direct' attribute is
+false and either the 'fallback' attribute was false or the Space Track
+web site was accessible. Otherwise, the latter will be the case.
 
 You can specify the L</retrieve> options on this method as well, but
 they will have no effect if the 'direct' attribute is true.
@@ -469,7 +490,7 @@ they will have no effect if the 'direct' attribute is true.
 
     sub celestrak {
 	my $self = shift;
-	delete $self->{_content_type};
+	delete $self->{_pragmata};
 
 	@_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
 	my $opt = shift;
@@ -493,7 +514,7 @@ they will have no effect if the 'direct' attribute is true.
 
     sub _celestrak_direct {
 	my $self = shift;
-	delete $self->{_content_type};
+	delete $self->{_pragmata};
 
 	@_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
 	my $opt = shift;
@@ -511,14 +532,53 @@ they will have no effect if the 'direct' attribute is true.
 	    $resp->content (join "\n",
 		map {s/\s+\[.\]\s*$//; $_} split '\n', $resp->content);
 	}
-	$self->{_content_type} = 'orbit';
-	$resp->push_header (pragma => 'spacetrack-type = orbit');
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'orbit',
+	    'spacetrack-source' => 'celestrak',
+	);
 	$self->_dump_headers ($resp) if $self->{dump_headers};
 	$resp;
     }
 
 }	# End local symbol block.
 
+=item $source = $st->content_source($resp);
+
+This method takes the given HTTP::Response object and returns the data
+source specified by the 'Pragma: spacetrack-source =' header. What
+values you can expect depend on the content_type (see below) as follows:
+
+If the content_type method returns 'iridium-status', you can expect
+content_source values of 'kelso', 'mccants', or 'sladen', corresponding
+to the main source of the data.
+
+If the content_type method returns 'orbit', you can expect
+content-source values of 'amsat', 'celestrak', 'spaceflight', or
+'spacetrack', corresponding to the actual source of the TLE data. Note
+that the celestrak() method may return a content_type of
+'spacetrack', if the 'direct' attribute was false,
+
+For any other values of content-type, the expected values are undefined.
+In fact, you will probably literally get undef, but the author does not
+commit even to this.
+
+If the response object is not provided, it returns the data source
+from the last method call that returned an HTTP::Response object.
+
+If the response object B<is> provided, you can call this as a static
+method (i.e. as Astro::SpaceTrack->content_source($response)).
+
+=cut
+
+sub content_source {
+    my $self = shift;
+    @_ or return $self->{_pragmata}{'spacetrack-source'};
+    my $resp = shift;
+    foreach ($resp->header ('Pragma')) {
+	m/spacetrack-source = (.+)/i and return $1;
+    }
+    return;
+}
 
 =item $type = $st->content_type ($resp);
 
@@ -535,11 +595,14 @@ following values are supported:
 If the response object is not provided, it returns the data type
 from the last method call that returned an HTTP::Response object.
 
+If the response object B<is> provided, you can call this as a static
+method (i.e. as Astro::SpaceTrack->content_type($response)).
+
 =cut
 
 sub content_type {
 my $self = shift;
-return $self->{_content_type} unless @_;
+@_ or return $self->{_pragmata}{'spacetrack-type'};
 my $resp = shift;
 foreach ($resp->header ('Pragma')) {
     m/spacetrack-type = (.+)/i and return $1;
@@ -552,25 +615,28 @@ return;
 
 =item $resp = $st->file ($name)
 
-This method takes the name of an observing list file, or a handle to
-an open observing list file, and returns an HTTP::Response object whose
-content is the relevant element sets. If called in list context, the
-first element of the list is the aforementioned HTTP::Response object,
-and the second element is a list reference to list references  (i.e.
-a list of lists). Each of the list references contains the catalog ID
-of a satellite or other orbiting body and the common name of the body.
+This method takes the name of an observing list file, or a handle to an
+open observing list file, and returns an HTTP::Response object whose
+content is the relevant element sets, retrieved from the Space Track web
+site. If called in list context, the first element of the list is the
+aforementioned HTTP::Response object, and the second element is a list
+reference to list references  (i.e.  a list of lists). Each of the list
+references contains the catalog ID of a satellite or other orbiting body
+and the common name of the body.
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method requires a Space Track username and password. It implicitly
+calls the login () method if the session cookie is missing or expired.
+If login () fails, you will get the HTTP::Response from login ().
 
 The observing list file is (how convenient!) in the Celestrak format,
 with the first five characters of each line containing the object ID,
 and the rest containing a name of the object. Lines whose first five
 characters do not look like a right-justified number will be ignored.
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 You can specify the L</retrieve> options on this method as well.
 
@@ -582,7 +648,7 @@ my $self = shift;
 @_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
 my $opt = shift;
 
-delete $self->{_content_type};
+delete $self->{_pragmata};
 my $name = shift;
 ref $name and fileno ($name) and return $self->_handle_observing_list (<$name>);
 -e $name or return HTTP::Response->new (RC_NOT_FOUND, "Can't find file $name");
@@ -603,13 +669,17 @@ of the given attribute. If called in list context, the second element
 of the list is just the value of the attribute, for those who don't want
 to winkle it out of the response object. We croak on a bad attribute name.
 
+If this method succeeds, the response will contain header
+
+ Pragma: spacetrack-type = get
+
 See L</Attributes> for the names and functions of the attributes.
 
 =cut
 
 sub get {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 my $name = shift;
 croak "No attribute name specified. Legal attributes are ",
 	join (', ', sort keys %mutator), ".\n"
@@ -618,8 +688,9 @@ croak "Attribute $name may not be gotten. Legal attributes are ",
 	join (', ', sort keys %mutator), ".\n"
     unless $mutator{$name};
 my $resp = HTTP::Response->new (RC_OK, undef, undef, $self->{$name});
-$self->{_content_type} = 'get';
-$resp->push_header (pragma => 'spacetrack-type = get');
+$self->_add_pragmata($resp,
+    'spacetrack-type' => 'get',
+);
 $self->_dump_headers ($resp) if $self->{dump_headers};
 return wantarray ? ($resp, $self->{$name}) : $resp;
 }
@@ -636,11 +707,19 @@ convenient (to the author) to include.
 If the L<webcmd|/webcmd> attribute is set, the L<http://search.cpan.org/>
 web page for this version of Astro::Satpass is launched.
 
+If this method succeeds B<and> the webcmd attribute is not set, the
+response will contain header
+
+ Pragma: spacetrack-type = help
+
+Otherwise (i.e. in any case where the response does B<not> contain
+actual help text) this header will be absent.
+
 =cut
 
 sub help {
 my $self = shift;
-delete $_[0]->{_content_type};
+delete $_[0]->{_pragmata};
 if ($self->{webcmd}) {
     system (join ' ', $self->{webcmd},
 	"http://search.cpan.org/~wyant/Astro-SpaceTrack-$VERSION/");
@@ -716,8 +795,9 @@ The following commands are defined:
 The shell supports a pseudo-redirection of standard output,
 using the usual Unix shell syntax (i.e. '>output_file').
 eod
-    $self->{_content_type} = 'help';
-    $resp->push_header (pragma => 'spacetrack-type = help');
+    $self->_add_pragmata($resp,
+	'spacetrack-type' => 'help',
+    );
     $self->_dump_headers ($resp) if $self->{dump_headers};
     $resp;
     }
@@ -733,6 +813,16 @@ HTTP::Response object containing the relevant data (if all queries
 succeeded) or the status of the first failure. If the queries succeed,
 the content is a series of lines formatted by "%6d   %-15s%-8s %s\n",
 with NORAD ID, name, status, and comment substituted in.
+
+No Space Track username and password are required to use this method.
+
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = iridium_status
+ Pragma: spacetrack-source = 
+
+The spacetrack-source will be 'kelso', 'mccants', or 'sladen', depending
+on the format requested.
 
 The source of the data and, to a certain extent, the format of the
 results is determined by the optional $format argument, which defaults
@@ -850,7 +940,7 @@ The BODY_STATUS constants are exportable using the :status tag.
     sub iridium_status {
     my $self = shift;
     my $fmt = shift || $self->{iridium_status_format};
-    delete $self->{_content_type};
+    delete $self->{_pragmata};
     my %rslt;
     my $kelso_url = $self->get ('url_iridium_status_kelso')->content;
     my $resp = $self->{agent}->get ($kelso_url);
@@ -960,8 +1050,10 @@ The BODY_STATUS constants are exportable using the :status tag.
     $resp->content (join '', map {
 	    sprintf "%6d   %-15s%-8s %s\n", @{$rslt{$_}}}
 	sort {$a <=> $b} keys %rslt);
-    $self->{_content_type} = 'iridium-status';
-    $resp->push_header (pragma => 'spacetrack-type = iridium-status');
+    $self->_add_pragmata($resp,
+	'spacetrack-type' => 'iridium-status',
+	'spacetrack-source' => $fmt,
+    );
     $self->_dump_headers ($resp) if $self->{dump_headers};
     wantarray ? ($resp, [values %rslt]) : $resp;
     }
@@ -973,19 +1065,21 @@ The BODY_STATUS constants are exportable using the :status tag.
 =item $resp = $st->login ( ... )
 
 If any arguments are given, this method passes them to the set ()
-method. Then it executes a login. The return is normally the
-HTTP::Response object from the login. But if no session cookie was
-obtained, the return is an HTTP::Response with an appropriate message
-and the code set to RC_UNAUTHORIZED from HTTP::Status (a.k.a. 401). If
-a login is attempted without the username and password being set, the
-return is an HTTP::Response with an appropriate message and the
+method. Then it executes a login to the Space Track web site. The return
+is normally the HTTP::Response object from the login. But if no session
+cookie was obtained, the return is an HTTP::Response with an appropriate
+message and the code set to RC_UNAUTHORIZED from HTTP::Status (a.k.a.
+401). If a login is attempted without the username and password being
+set, the return is an HTTP::Response with an appropriate message and the
 code set to RC_PRECONDITION_FAILED from HTTP::Status (a.k.a. 412).
+
+A Space Track username and password are required to use this method.
 
 =cut
 
 sub login {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 @_ and $self->set (@_);
 $self->{username} && $self->{password} or
     return HTTP::Response->new (
@@ -1028,11 +1122,14 @@ reference to a list of two-element lists; each inner list contains the
 description and the catalog name, in that order (suitable for inserting
 into a Tk Optionmenu).
 
+No Space Track username and password are required to use this method,
+since all it is doing is returning data kept by this module.
+
 =cut
 
 sub names {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 my $name = lc shift;
 $catalogs{$name} or return HTTP::Response (
 	RC_NOT_FOUND, "Data source '$name' not found.");
@@ -1058,9 +1155,17 @@ return ($resp, \@list);
 =item $resp = $st->retrieve (number_or_range ...)
 
 This method retrieves the latest element set for each of the given
-satellite ID numbers (also known as SATCAT IDs, NORAD IDs, or OIDs).
-Non-numeric catalog numbers are ignored, as are (at a later stage)
-numbers that do not actually represent a satellite.
+satellite ID numbers (also known as SATCAT IDs, NORAD IDs, or OIDs) from
+The Space Track web site.  Non-numeric catalog numbers are ignored, as
+are (at a later stage) numbers that do not actually represent a
+satellite.
+
+A Space Track username and password are required to use this method.
+
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 Number ranges are represented as 'start-end', where both 'start' and
 'end' are catalog numbers. If 'start' > 'end', the numbers will be
@@ -1122,7 +1227,7 @@ use constant RETRIEVAL_SIZE => 50;
 
 sub retrieve {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 
 @_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
 my $opt = _parse_retrieve_dates (shift);
@@ -1196,8 +1301,10 @@ eod
 $content or return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
 $resp->content ($content);
 $self->_convert_content ($resp);
-$self->{_content_type} = 'orbit';
-$resp->push_header (pragma => 'spacetrack-type = orbit');
+$self->_add_pragmata($resp,
+    'spacetrack-type' => 'orbit',
+    'spacetrack-source' => 'spacetrack',
+);
 $resp;
 }
 
@@ -1206,11 +1313,13 @@ $resp;
 
 =item $resp = $st->search_date (date ...)
 
-This method searches the database for objects launched on the given
-date. The date is specified as year-month-day, with any non-digit being
-legal as the separator. You can omit -day or specify it as 0 to get
-all launches for the given month. You can omit -month (or specify it
-as 0) as well to get all launches for the given year.
+This method searches the Space Track database for objects launched on
+the given date. The date is specified as year-month-day, with any
+non-digit being legal as the separator. You can omit -day or specify it
+as 0 to get all launches for the given month. You can omit -month (or
+specify it as 0) as well to get all launches for the given year.
+
+A Space Track username and password are required to use this method.
 
 You can specify options for the search as either command-type options
 (e.g. search (-status => 'onorbit', ...)) or as a leading hash reference
@@ -1266,8 +1375,10 @@ of lists). The first list reference contains the header text for all
 columns returned, and the subsequent list references contain the data
 for each match.
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 =cut
 
@@ -1301,15 +1412,17 @@ $self->_search_generic (sub {
 
 =item $resp = $st->search_id (id ...)
 
-This method searches the database for objects having the given
-international IDs. The international ID is the last two digits of the
-launch year (in the range 1957 through 2056), the three-digit sequence
-number of the launch within the year (with leading zeroes as needed),
-and the piece (A through ZZ, with A typically being the payload). You
-can omit the piece and get all pieces of that launch, or omit both the
-piece and the launch number and get all launches for the year. There is
-no mechanism to restrict the search to a given on-orbit status, or to
-filter out debris or rocket bodies.
+This method searches the Space Track database for objects having the
+given international IDs. The international ID is the last two digits of
+the launch year (in the range 1957 through 2056), the three-digit
+sequence number of the launch within the year (with leading zeroes as
+needed), and the piece (A through ZZ, with A typically being the
+payload). You can omit the piece and get all pieces of that launch, or
+omit both the piece and the launch number and get all launches for the
+year. There is no mechanism to restrict the search to a given on-orbit
+status, or to filter out debris or rocket bodies.
+
+A Space Track username and password are required to use this method.
 
 This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
@@ -1323,8 +1436,10 @@ lists). The first list reference contains the header text for all
 columns returned, and the subsequent list references contain the data
 for each match.
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 You can specify the L</retrieve> options on this method as well.
 
@@ -1357,8 +1472,10 @@ $self->_search_generic (sub {
 
 =item $resp = $st->search_name (name ...)
 
-This method searches the database for the named objects. Matches
-are case-insensitive and all matches are returned.
+This method searches the Space Track database for the named objects.
+Matches are case-insensitive and all matches are returned.
+
+A Space Track username and password are required to use this method.
 
 This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
@@ -1372,8 +1489,10 @@ of lists). The first list reference contains the header text for all
 columns returned, and the subsequent list references contain the data
 for each match.
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 You can specify the L</retrieve> and L</search_date> options on this
 method as well. The L</search_date> -status option is known to work,
@@ -1419,7 +1538,7 @@ See L</Attributes> for the names and functions of the attributes.
 
 sub set {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 croak "@{[__PACKAGE__]}->set (@{[join ', ', map {qq{'$_'}} @_]}) requires an even number of arguments"
     if @_ % 2;
 while (@_) {
@@ -1478,7 +1597,7 @@ Unlike most of the other methods, this one returns nothing.
 my ($read, $print, $out, $rdln);
 
 sub shell {
-my $self = shift if UNIVERSAL::isa $_[0], __PACKAGE__;
+my $self = shift if eval {$_[0]->isa(__PACKAGE__)};
 $self ||= Astro::SpaceTrack->new (addendum => <<eod);
 
 'help' gets you a list of valid commands.
@@ -1488,7 +1607,7 @@ my $prompt = 'SpaceTrack> ';
 
 $out = \*STDOUT;
 $print = sub {
-	my $hndl = UNIVERSAL::isa ($_[0], 'FileHandle') ? shift : $out;
+	my $hndl = eval {$_[0]->isa('FileHandle')} ? shift : $out;
 	print $hndl @_
 	};
 
@@ -1585,7 +1704,7 @@ cannot be read.
 =cut
 
 sub source {
-my $self = shift if UNIVERSAL::isa $_[0], __PACKAGE__;
+my $self = shift if eval {$_[0]->isa(__PACKAGE__)};
 $self ||= Astro::SpaceTrack->new ();
 $self->shell ($self->_source (@_), 'exit');
 }
@@ -1604,6 +1723,11 @@ No Space Track account is needed to access this data, even if the
 'direct' attribute is false. But if the 'direct' attribute is true,
 the setting of the 'with_name' attribute is ignored.
 
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spaceflight
+
 This method is a web page scraper. any change in the location of the
 web pages, or any substantial change in their format, will break this
 method.
@@ -1617,7 +1741,7 @@ if -start_epoch, -end_epoch, or -last5 is specified.
 
 sub spaceflight {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 
 @_ = _parse_retrieve_args ([all => 'retrieve all data'], @_)
     unless ref $_[0] eq 'HASH';
@@ -1693,8 +1817,10 @@ $content or
     return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_RECORDS);
 
 my $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
-$self->{_content_type} = 'orbit';
-$resp->push_header (pragma => 'spacetrack-type = orbit');
+$self->_add_pragmata($resp,
+    'spacetrack-type' => 'orbit',
+    'spacetrack-source' => 'spaceflight',
+);
 $self->_dump_headers ($resp) if $self->{dump_headers};
 $resp;
 }
@@ -1703,16 +1829,23 @@ $resp;
 
 =item $resp = $st->spacetrack ($name_or_number);
 
-This method downloads the given bulk catalog of orbital elements. If
-the argument is an integer, it represents the number of the
-catalog to download. Otherwise, it is expected to be the name of
-the catalog, and whether you get a two-line or three-line dataset is
-specified by the setting of the with_name attribute. The return is
-the HTTP::Response object fetched. If an invalid catalog name is
-requested, an HTTP::Response object is returned, with an appropriate
-message and the error code set to RC_NOTFOUND from HTTP::Status
-(a.k.a. 404). This will also happen if the HTTP get succeeds but we
-do not get the expected content.
+This method downloads the given bulk catalog of orbital elements from
+the Space Track web site. If the argument is an integer, it represents
+the number of the catalog to download. Otherwise, it is expected to be
+the name of the catalog, and whether you get a two-line or three-line
+dataset is specified by the setting of the with_name attribute. The
+return is the HTTP::Response object fetched. If an invalid catalog name
+is requested, an HTTP::Response object is returned, with an appropriate
+message and the error code set to RC_NOTFOUND from HTTP::Status (a.k.a.
+404). This will also happen if the HTTP get succeeds but we do not get
+the expected content.
+
+A Space Track username and password are required to use this method.
+
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
 
 Note that when requesting spacetrack data sets by catalog number the
 setting of the 'with_name' attribute is ignored.
@@ -1738,14 +1871,11 @@ This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
-If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
-added to the HTTP::Response object returned.
-
 =cut
 
 sub spacetrack {
 my $self = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 my $catnum = shift;
 $catnum =~ m/\D/ and do {
     my $info = $catalogs{spacetrack}{$catnum} or
@@ -1801,8 +1931,10 @@ $resp->is_success and do {
 ##	    'content-length' => length ($resp->content),
 	    );
 	$self->_convert_content ($resp);
-	$self->{_content_type} = 'orbit';
-	$resp->push_header (pragma => 'spacetrack-type = orbit');
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'orbit',
+	    'spacetrack-source' => 'spacetrack',
+	);
     }
     };
 $resp;
@@ -1813,6 +1945,23 @@ $resp;
 #
 #	Private methods.
 #
+
+#	$self->_add_pragmata ($resp, $name => $value, ...);
+#
+#	This method adds pragma headers to the given HTTP::Response
+#	object, of the form pragma => "$name = $value". The pragmata are
+#	also cached in $self.
+
+sub _add_pragmata {
+    my $self = shift;
+    my $resp = shift;
+    while (@_) {
+	my $name = shift;
+	my $value = shift;
+	$self->{_pragmata}{$name} = $value;
+	$resp->push_header(pragma => "$name = $value");
+    }
+}
 
 #	_check_cookie looks for our session cookie. If it's found, it returns
 #	the cookie's expiration time and sets the relevant attributes.
@@ -1996,9 +2145,11 @@ foreach (map {split '\n', $_} @_) {
     }
 my $resp = $self->retrieve ($opt, sort {$a <=> $b} @catnum);
 if ($resp->is_success) {
-    unless ($self->{_content_type}) {
-	$self->{_content_type} = 'orbit';
-	$resp->push_header (pragma => 'spacetrack-type = orbit');
+    unless ($self->{_pragmata}) {
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'orbit',
+	    'spacetrack-source' => 'spacetrack',
+	);
 	}
     $self->_dump_headers ($resp) if $self->{dump_headers};
     }
@@ -2252,7 +2403,7 @@ my $path = shift;
 sub _search_generic {
 my $self = shift;
 my $poster = shift;
-delete $self->{_content_type};
+delete $self->{_pragmata};
 
 @_ = _parse_retrieve_args (@_) unless ref $_[0] eq 'HASH';
 my $opt = shift;
@@ -2643,7 +2794,7 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
 	 for myself.
      Fixed dependencies in Makefile.PL and Build.PL.
      Went back to prompting for executables in Makefile.PL and
-         Build.PL, as a way to handle apparant ActiveState built
+         Build.PL, as a way to handle apparant ActiveState build
 	 failure because both they and I were running pl2bat.bat.
      Enhance ExtUtils::MakeMaker version detection in Makefile.PL,
          since ActiveState is apparantly deploying a Perl 5.10
@@ -2655,6 +2806,15 @@ insufficiently-up-to-date version of LWP or HTML::Parser.
      Add iridium_status('sladen') to scrape Rod Sladen's Iridium
          Constallation Status web page.
      Add attribute 'url_iridium_status_sladen'.
+ 0.034 24-Nov-2008 T. R. Wyant
+     Eliminate use of UNIVERSAL::isa as a function.
+     Add 'Pragma spacetrack-source = ' header to all methods
+	 that return TLEs or Iridium status, saying where
+	 the data came from.
+     Add content_source() method to access spacetrack-source
+	 header.
+     Try for less bad test coverage. Good coverage awaits a
+	 rewrite of the shell() method.
 
 =head1 ACKNOWLEDGMENTS
 

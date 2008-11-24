@@ -21,7 +21,7 @@ return $input;
 }
 
 BEGIN {
-plan (tests => 21);
+plan (tests => 67);
 print "# Test 1 - Loading the library.\n"
 }
 
@@ -43,6 +43,8 @@ my $skip_celestrak = NOACCESS
     unless $agt->get ('http://celestrak.com/')->is_success;
 my $skip_mccants = NOACCESS
     unless $agt->get ('http://www.io.com/~mmccants/tles/iridium.html')->is_success;
+my $skip_sladen = NOACCESS
+    unless $agt->get ('http://www.rod.sladen.org.uk/iridium.htm')->is_success;
 my $skip_spaceflight = NOACCESS
     unless $agt->get ('http://spaceflight.nasa.gov/')->is_success;
 my $skip_amsat = NOACCESS
@@ -107,20 +109,101 @@ $test_num++;
 print "# Test $test_num - Instantiate the object.\n";
 my $st;
 ok ($st = Astro::SpaceTrack->new ());
+$st or $skip_spacetrack = 'Unable to instantiate Astro::SpaceTrack';
+
+{
+    $test_num++;
+    print "# Test $test_num - Fetch attribute names.\n";
+    $skip_spacetrack or my @names = $st->attribute_names();
+    skip($skip_spacetrack, @names > 0);
+    my %present = map {$_ => 1} @names;
+
+    $test_num++;
+    print "# Test $test_num - We have a username attribute.\n";
+    skip($skip_spacetrack, $present{username});
+
+    $test_num++;
+    print "# Test $test_num - Banner.\n";
+    $skip_spacetrack or my $rslt = $st->banner();
+    skip($skip_spacetrack, $rslt && $rslt->is_success());
+
+    $test_num++;
+    my $year = (localtime)[5] + 1900;
+    print "# Test $test_num - Banner has current copyright.\n";
+    skip($skip_spacetrack, $rslt && ($rslt->content() =~ m/Copyright.*$year/));
+}
 
 $test_num++;
 print "# Test $test_num - Log in to Space Track.\n";
+my $rslt;
 my $status;
-skip ($skip_spacetrack, $skip_spacetrack || ($status = $st->login ()->is_success));
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($status = ($rslt = $st->login ())->is_success));
 $status or $skip_spacetrack ||= "Login failed";
 
 $test_num++;
+print "# Test $test_num - Check the content type; should be undef.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || !defined ($st->content_type));
+
+$test_num++;
+print "# Test $test_num - Check the content source; should be undef.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || !defined ($st->content_source));
+
+$test_num++;
+print "# Test $test_num - Check the content type of result; should be undef.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || !defined ($st->content_type($rslt)));
+
+$test_num++;
+print "# Test $test_num - Check the content source of result; should be undef.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || !defined ($st->content_source($rslt)));
+
+$test_num++;
 print "# Test $test_num - Fetch a catalog entry.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->spacetrack ('special')->is_success);
+skip ($skip_spacetrack,
+    $skip_spacetrack || $st->spacetrack ('special')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
 
 $test_num++;
 print "# Test $test_num - Retrieve some orbital elements.\n";
 skip ($skip_spacetrack, $skip_spacetrack || $st->retrieve (25544)->is_success);
+
+$test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
+
+$test_num++;
+print "# Test $test_num - Retrieve orbital elements listed in a file.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || $st->file ('t/file.dat')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack,
+    $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
 
 $test_num++;
 print "# Test $test_num - Retrieve a range of orbital elements.\n";
@@ -131,26 +214,73 @@ print "# Test $test_num - Check the content type.\n";
 skip ($skip_spacetrack, $skip_spacetrack || ($st->content_type || '') eq 'orbit');
 
 $test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
+
+$test_num++;
 print "# Test $test_num - Search for something by name.\n";
 skip ($skip_spacetrack, $skip_spacetrack || $st->search_name ('zarya')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
 
 $test_num++;
 print "# Test $test_num - Search by international designator.\n";
 skip ($skip_spacetrack, $skip_spacetrack || $st->search_id ('98067A')->is_success);
 
 $test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
+
+$test_num++;
 print "# Test $test_num - Search by launch date.\n";
 skip ($skip_spacetrack, $skip_spacetrack || $st->search_date ('06-07-04')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
 
 $test_num++;
 print "# Test $test_num - Retrieve historical elements.\n";
 skip ($skip_spacetrack, $skip_spacetrack || $st->retrieve (-start_epoch => '2006/04/01', 25544)->is_success);
 
 $test_num++;
-print "# Test $test_num - Fetch a Celestrak data set.\n";
-skip ($skip_spacetrack || $skip_celestrak,
-    $skip_spacetrack || $skip_celestrak ||
-    $st->celestrak ('stations')->is_success);
+print "# Test $test_num - Check the content type.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_type || '') eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source.\n";
+skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spacetrack');
+
+{
+    my $skip = $skip_spacetrack || $skip_celestrak;
+
+    $test_num++;
+    print "# Test $test_num - Fetch a Celestrak data set.\n";
+    skip ($skip, $skip || $st->celestrak ('stations')->is_success);
+
+    $test_num++;
+    print "# Test $test_num - Check content type of Celestrak data set.\n";
+    skip ($skip, $skip || $st->content_type () eq 'orbit');
+
+    $test_num++;
+    print "# Test $test_num - Check the content source of Celestrak data set.\n";
+    skip ($skip, $skip || ($st->content_source || '') eq 'spacetrack');
+
+}
 
 $test_num++;
 print "# Test $test_num - Fetch a Celestrak data set, with fallback.\n";
@@ -168,22 +298,77 @@ $st->set (fallback => 0);
 skip ($skip_spacetrack || $skip_celestrak, $skip_spacetrack || $skip_celestrak || !$st->celestrak ('stations')->is_success);
 
 $test_num++;
-print "# Test $test_num - Direct-fetch a Celestrak data set.\n";
+print "# Test $test_num - Direct-fetch Celestrak stations.\n";
 $st->set (direct => 1);
-skip ($skip_celestrak, $skip_celestrak || $st->celestrak ('stations')->is_success);
+$skip_celestrak or $rslt = $st->celestrak('stations');
+skip ($skip_celestrak, $skip_celestrak || $rslt->is_success);
 
 $test_num++;
 print "# Test $test_num - Check content type of Celestrak data set.\n";
 skip ($skip_celestrak, $skip_celestrak || $st->content_type () eq 'orbit');
 
 $test_num++;
+print "# Test $test_num - Check the content source of Celestrak data set.\n";
+skip ($skip_celestrak,
+    $skip_celestrak || ($st->content_source || '') eq 'celestrak');
+
+$test_num++;
+print "# Test $test_num - Check content type of Celestrak data set in header.\n";
+skip ($skip_celestrak, $skip_celestrak || $st->content_type ($rslt) eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Celestrak data set in header.\n";
+skip ($skip_celestrak,
+    $skip_celestrak || ($st->content_source($rslt) || '') eq 'celestrak');
+
+$test_num++;
+print "# Test $test_num - Direct-fetch Celestrak iridium.\n";
+skip ($skip_celestrak, $skip_celestrak || $st->celestrak ('iridium')->is_success);
+
+$test_num++;
+print "# Test $test_num - Check content type of Celestrak data set.\n";
+skip ($skip_celestrak, $skip_celestrak || $st->content_type () eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Celestrak data set.\n";
+skip ($skip_celestrak,
+    $skip_celestrak || ($st->content_source || '') eq 'celestrak');
+$test_num++;
 print "# Test $test_num - Try to retrieve data from Human Space Flight.\n";
 skip ($skip_spaceflight, $skip_spaceflight || $st->spaceflight()->is_success);
 
 $test_num++;
-print "# Test $test_num - Get Iridium status.\n";
+print "# Test $test_num - Check content type of Human Space Flight data set.\n";
+skip ($skip_spaceflight, $skip_spaceflight || $st->content_type () eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Human Space Flight data set.\n";
+skip ($skip_spaceflight, $skip_spaceflight || ($st->content_source || '') eq 'spaceflight');
+
+$test_num++;
+print "# Test $test_num - Try to retrieve data from the Radio Amateur Satellite Corporation.\n";
+skip ($skip_amsat, $skip_amsat || $st->amsat()->is_success);
+
+$test_num++;
+print "# Test $test_num - Check content type of Amsat data set.\n";
+skip ($skip_amsat, $skip_amsat || $st->content_type () eq 'orbit');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Amsat data set.\n";
+skip ($skip_amsat, $skip_amsat || ($st->content_source || '') eq 'amsat');
+
+$test_num++;
+print "# Test $test_num - Get Iridium status (McCants).\n";
 skip ($skip_celestrak || $skip_mccants,
     $skip_celestrak || $skip_mccants || $st->iridium_status()->is_success);
+
+$test_num++;
+print "# Test $test_num - Check content type of McCants Iridium status.\n";
+skip ($skip_celestrak || $skip_mccants, $skip_celestrak || $skip_mccants || $st->content_type () eq 'iridium-status');
+
+$test_num++;
+print "# Test $test_num - Check the content source of McCants Iridium status.\n";
+skip ($skip_celestrak || $skip_mccants, $skip_celestrak || $skip_mccants || ($st->content_source || '') eq 'mccants');
 
 $test_num++;
 print "# Test $test_num - Get Iridium status (Kelso only).\n";
@@ -191,5 +376,38 @@ $st->set (iridium_status_format => 'kelso');
 skip ($skip_celestrak, $skip_celestrak || $st->iridium_status()->is_success);
 
 $test_num++;
-print "# Test $test_num - Try to retrieve data from the Radio Amateur Satellite Corporation.\n";
-skip ($skip_amsat, $skip_amsat || $st->amsat()->is_success);
+print "# Test $test_num - Check content type of Kelso Iridium status.\n";
+skip ($skip_celestrak, $skip_celestrak  || $st->content_type () eq 'iridium-status');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Kelso Iridium status.\n";
+skip ($skip_celestrak, $skip_celestrak  || ($st->content_source || '') eq 'kelso');
+
+$test_num++;
+print "# Test $test_num - Get Iridium status (Sladen).\n";
+$st->set (iridium_status_format => 'sladen');
+skip ($skip_celestrak || $skip_sladen,
+    $skip_celestrak || $skip_sladen || $st->iridium_status()->is_success);
+
+$test_num++;
+print "# Test $test_num - Check content type of Sladen Iridium status.\n";
+skip ($skip_celestrak || $skip_sladen,
+    $skip_celestrak || $skip_sladen || $st->content_type () eq 'iridium-status');
+
+$test_num++;
+print "# Test $test_num - Check the content source of Sladen Iridium status.\n";
+skip ($skip_celestrak || $skip_sladen,
+    $skip_celestrak || $skip_sladen || ($st->content_source || '') eq 'sladen');
+
+$test_num++;
+print "# Test $test_num - Get internal help.\n";
+$st->set (webcmd => undef);
+ok($st->help()->is_success());
+
+$test_num++;
+print "# Test $test_num - Check content type of help.\n";
+ok($st->content_type eq 'help');
+
+$test_num++;
+print "# Test $test_num - Check the content source of help.\n";
+ok(!defined($st->content_source));
