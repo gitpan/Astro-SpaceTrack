@@ -1,10 +1,15 @@
+package main;
+
 use strict;
 use warnings;
+
+# We're a test, and potentially have to deal with all sorts of data.
+no warnings qw{uninitialized};	## no critic ProhibitNoWarnings
 
 use FileHandle;
 use Test;
 
-$| = 1;	# Turn on autoflush to try to keep I/O in sync.
+local $| = 1;	# Turn on autoflush to try to keep I/O in sync.
 
 my $test_num = 1;
 my $skip_spacetrack = '';
@@ -13,15 +18,18 @@ my $skip_spacetrack = '';
 
 my $loaded;
 
-sub prompt {
+# We're only using @_ for printing. CAVEAT: do not modify its contents.
+# Modifying @_ itself is OK.
+sub prompt {	## no critic RequireArgUnpacking
 print STDERR @_;
-return unless defined (my $input = <STDIN>);
+# We're a test, and we're trying to be lightweight.
+return unless defined (my $input = <STDIN>);	## no critic ProhibitExplicitStdin
 chomp $input;
 return $input;
 }
 
 BEGIN {
-plan (tests => 67);
+plan (tests => 68);
 print "# Test 1 - Loading the library.\n"
 }
 
@@ -37,18 +45,22 @@ ok ($loaded);
 require LWP::UserAgent;
 my $agt = LWP::UserAgent->new ();
 
-use constant NOACCESS => 'Site not accessible.';
+# Perl::Critic doesn't like this because it doesn't interpolate. So
+# don't do that.
+use constant NOACCESS => 'Site not accessible.';	## no critic ProhibitConstantPragma
 
-my $skip_celestrak = NOACCESS
-    unless $agt->get ('http://celestrak.com/')->is_success;
-my $skip_mccants = NOACCESS
-    unless $agt->get ('http://www.io.com/~mmccants/tles/iridium.html')->is_success;
-my $skip_sladen = NOACCESS
-    unless $agt->get ('http://www.rod.sladen.org.uk/iridium.htm')->is_success;
-my $skip_spaceflight = NOACCESS
-    unless $agt->get ('http://spaceflight.nasa.gov/')->is_success;
-my $skip_amsat = NOACCESS
-    unless $agt->get ('http://www.amsat.org/')->is_success;
+my ($skip_celestrak, $skip_mccants, $skip_sladen, $skip_spaceflight,
+    $skip_amsat);
+$agt->get ('http://celestrak.com/')->is_success
+    or $skip_celestrak = NOACCESS;
+$agt->get ('http://www.io.com/~mmccants/tles/iridium.html')->is_success
+    or $skip_mccants = NOACCESS;
+$agt->get ('http://www.rod.sladen.org.uk/iridium.htm')->is_success
+    or $skip_sladen = NOACCESS;
+$agt->get ('http://spaceflight.nasa.gov/')->is_success
+    or $skip_spaceflight = NOACCESS;
+$agt->get ('http://www.amsat.org/')->is_success
+    or $skip_amsat = NOACCESS;
 
 if (!$agt->get ('http://www.space-track.org/')->is_success) {
     $skip_spacetrack = NOACCESS;
@@ -94,8 +106,9 @@ username will be skipped.
 
 eod
 
-    my $user = prompt ("Space-Track username: ");
-    my $pass = prompt ("Space-Track password: ") if $user;
+    my ($user, $pass);
+    $user = prompt ("Space-Track username: ");
+    $user and $pass = prompt ("Space-Track password: ");
 
     if ($user && $pass) {
 	$ENV{SPACETRACK_USER} = "$user/$pass";
@@ -139,7 +152,7 @@ my $rslt;
 my $status;
 skip ($skip_spacetrack,
     $skip_spacetrack || ($status = ($rslt = $st->login ())->is_success));
-$status or $skip_spacetrack ||= "Login failed";
+$status or ($skip_spacetrack ||= "Login failed");
 
 $test_num++;
 print "# Test $test_num - Check the content type; should be undef.\n";
@@ -164,7 +177,8 @@ skip ($skip_spacetrack,
 $test_num++;
 print "# Test $test_num - Fetch a catalog entry.\n";
 skip ($skip_spacetrack,
-    $skip_spacetrack || $st->spacetrack ('special')->is_success);
+##    $skip_spacetrack || $st->spacetrack ('special')->is_success);
+    $skip_spacetrack || _expect_success(spacetrack => 'special'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -178,7 +192,9 @@ skip ($skip_spacetrack,
 
 $test_num++;
 print "# Test $test_num - Retrieve some orbital elements.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->retrieve (25544)->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->retrieve (25544)->is_success);
+    $skip_spacetrack || _expect_success(retrieve => 25544));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -193,7 +209,8 @@ skip ($skip_spacetrack,
 $test_num++;
 print "# Test $test_num - Retrieve orbital elements listed in a file.\n";
 skip ($skip_spacetrack,
-    $skip_spacetrack || $st->file ('t/file.dat')->is_success);
+##    $skip_spacetrack || $st->file ('t/file.dat')->is_success);
+    $skip_spacetrack || _expect_success(file => 't/file.dat'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -207,7 +224,9 @@ skip ($skip_spacetrack,
 
 $test_num++;
 print "# Test $test_num - Retrieve a range of orbital elements.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->retrieve ('25544-25546')->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->retrieve ('25544-25546')->is_success);
+    $skip_spacetrack || _expect_success(retrieve => '25544-25546'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -219,7 +238,9 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 
 $test_num++;
 print "# Test $test_num - Search for something by name.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->search_name ('zarya')->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->search_name ('zarya')->is_success);
+    $skip_spacetrack || _expect_success(search_name => 'zarya'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -231,7 +252,9 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 
 $test_num++;
 print "# Test $test_num - Search by international designator.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->search_id ('98067A')->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->search_id ('98067A')->is_success);
+    $skip_spacetrack || _expect_success(search_id => '98067A'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -243,7 +266,9 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 
 $test_num++;
 print "# Test $test_num - Search by launch date.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->search_date ('06-07-04')->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->search_date ('06-07-04')->is_success);
+    $skip_spacetrack || _expect_success(search_date => '06-07-04'));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -255,7 +280,11 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 
 $test_num++;
 print "# Test $test_num - Retrieve historical elements.\n";
-skip ($skip_spacetrack, $skip_spacetrack || $st->retrieve (-start_epoch => '2006/04/01', 25544)->is_success);
+skip ($skip_spacetrack,
+##    $skip_spacetrack || $st->retrieve (
+##	-start_epoch => '2006/04/01', 25544)->is_success);
+    $skip_spacetrack || _expect_success(retrieve =>
+	-start_epoch => '2006/04/01', 25544));
 
 $test_num++;
 print "# Test $test_num - Check the content type.\n";
@@ -270,7 +299,9 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 
     $test_num++;
     print "# Test $test_num - Fetch a Celestrak data set.\n";
-    skip ($skip, $skip || $st->celestrak ('stations')->is_success);
+    skip ($skip,
+##	$skip || $st->celestrak ('stations')->is_success);
+	$skip || _expect_success(celestrak => 'stations'));
 
     $test_num++;
     print "# Test $test_num - Check content type of Celestrak data set.\n";
@@ -285,12 +316,20 @@ skip ($skip_spacetrack, $skip_spacetrack || ($st->content_source || '') eq 'spac
 $test_num++;
 print "# Test $test_num - Fetch a Celestrak data set, with fallback.\n";
 $st->set (fallback => 1);
-skip ($skip_spacetrack || $skip_celestrak, $skip_spacetrack || $skip_celestrak || $st->celestrak ('stations')->is_success);
+skip ($skip_spacetrack || $skip_celestrak,
+##    $skip_spacetrack || $skip_celestrak || $st->celestrak (
+##	'stations')->is_success);
+    $skip_spacetrack || $skip_celestrak || _expect_success(
+	celestrak => 'stations'));
 
 $test_num++;
 print "# Test $test_num - With fallback, succeed without user/password.\n";
 $st->set (username => undef, password => undef);
-skip ($skip_spacetrack || $skip_celestrak, $skip_spacetrack || $skip_celestrak || $st->celestrak ('stations')->is_success);
+skip ($skip_spacetrack || $skip_celestrak,
+##    $skip_spacetrack || $skip_celestrak || $st->celestrak (
+##	'stations')->is_success);
+    $skip_spacetrack || $skip_celestrak || _expect_success(
+	celestrak => 'stations'));
 
 $test_num++;
 print "# Test $test_num - Without fallback, fail without user/password.\n";
@@ -301,7 +340,9 @@ $test_num++;
 print "# Test $test_num - Direct-fetch Celestrak stations.\n";
 $st->set (direct => 1);
 $skip_celestrak or $rslt = $st->celestrak('stations');
-skip ($skip_celestrak, $skip_celestrak || $rslt->is_success);
+skip ($skip_celestrak,
+##    $skip_celestrak || $rslt->is_success);
+    $skip_celestrak || _expect_success(celestrak => 'stations'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Celestrak data set.\n";
@@ -323,7 +364,9 @@ skip ($skip_celestrak,
 
 $test_num++;
 print "# Test $test_num - Direct-fetch Celestrak iridium.\n";
-skip ($skip_celestrak, $skip_celestrak || $st->celestrak ('iridium')->is_success);
+skip ($skip_celestrak,
+##    $skip_celestrak || $st->celestrak ('iridium')->is_success);
+    $skip_celestrak || _expect_success(celestrak => 'iridium'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Celestrak data set.\n";
@@ -335,7 +378,9 @@ skip ($skip_celestrak,
     $skip_celestrak || ($st->content_source || '') eq 'celestrak');
 $test_num++;
 print "# Test $test_num - Try to retrieve data from Human Space Flight.\n";
-skip ($skip_spaceflight, $skip_spaceflight || $st->spaceflight()->is_success);
+skip ($skip_spaceflight,
+##    $skip_spaceflight || $st->spaceflight()->is_success);
+    $skip_spaceflight || _expect_success('spaceflight'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Human Space Flight data set.\n";
@@ -347,7 +392,9 @@ skip ($skip_spaceflight, $skip_spaceflight || ($st->content_source || '') eq 'sp
 
 $test_num++;
 print "# Test $test_num - Try to retrieve data from the Radio Amateur Satellite Corporation.\n";
-skip ($skip_amsat, $skip_amsat || $st->amsat()->is_success);
+skip ($skip_amsat,
+##    $skip_amsat || $st->amsat()->is_success);
+    $skip_amsat || _expect_success('amsat'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Amsat data set.\n";
@@ -360,7 +407,8 @@ skip ($skip_amsat, $skip_amsat || ($st->content_source || '') eq 'amsat');
 $test_num++;
 print "# Test $test_num - Get Iridium status (McCants).\n";
 skip ($skip_celestrak || $skip_mccants,
-    $skip_celestrak || $skip_mccants || $st->iridium_status()->is_success);
+##    $skip_celestrak || $skip_mccants || $st->iridium_status()->is_success);
+    $skip_celestrak || $skip_mccants || _expect_success('iridium_status'));
 
 $test_num++;
 print "# Test $test_num - Check content type of McCants Iridium status.\n";
@@ -373,7 +421,9 @@ skip ($skip_celestrak || $skip_mccants, $skip_celestrak || $skip_mccants || ($st
 $test_num++;
 print "# Test $test_num - Get Iridium status (Kelso only).\n";
 $st->set (iridium_status_format => 'kelso');
-skip ($skip_celestrak, $skip_celestrak || $st->iridium_status()->is_success);
+skip ($skip_celestrak,
+##    $skip_celestrak || $st->iridium_status()->is_success);
+    $skip_celestrak || _expect_success('iridium_status'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Kelso Iridium status.\n";
@@ -387,7 +437,8 @@ $test_num++;
 print "# Test $test_num - Get Iridium status (Sladen).\n";
 $st->set (iridium_status_format => 'sladen');
 skip ($skip_celestrak || $skip_sladen,
-    $skip_celestrak || $skip_sladen || $st->iridium_status()->is_success);
+##    $skip_celestrak || $skip_sladen || $st->iridium_status()->is_success);
+    $skip_celestrak || $skip_sladen || _expect_success('iridium_status'));
 
 $test_num++;
 print "# Test $test_num - Check content type of Sladen Iridium status.\n";
@@ -411,3 +462,19 @@ ok($st->content_type eq 'help');
 $test_num++;
 print "# Test $test_num - Check the content source of help.\n";
 ok(!defined($st->content_source));
+
+$st->set(banner => undef);
+$st->shell('', '# comment', 'set banner 1', 'exit');
+$test_num++;
+print "# Test $test_num - Reset an attribute using the shell.\n";
+ok($st->get('banner'));
+
+sub _expect_success {
+    my ($method, @args) = @_;
+    my $rslt = $st->$method(@args);
+    my $rtn = $rslt->is_success
+	or warn $rslt->status_line;
+    return $rtn;
+}
+
+1;
