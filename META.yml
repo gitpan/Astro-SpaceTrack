@@ -1,6 +1,6 @@
 ---
 name: Astro-SpaceTrack
-version: 0.035
+version: 0.036
 author:
   - Tom Wyant (wyant at cpan dot org)
 abstract: Download satellite orbital elements from Space Track
@@ -13,12 +13,13 @@ requires:
   HTTP::Response: 0
   HTTP::Status: 0
   LWP::UserAgent: 0
+  Params::Util: 0.12
   perl: 5.006
 dynamic_config: 1
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.035
+    version: 0.036
   Astro::SpaceTrack::Parser:
     file: lib/Astro/SpaceTrack/Parser.pm
 generated_by: Module::Build version 0.31
