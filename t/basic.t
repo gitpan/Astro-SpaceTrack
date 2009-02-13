@@ -23,14 +23,14 @@ sub prompt {
     my @args = @_;
     print STDERR @args;
     # We're a test, and we're trying to be lightweight.
-    return unless defined (my $input = <STDIN>);	## no critic ProhibitExplicitStdin
+    return unless defined (my $input = <STDIN>);	## no critic (ProhibitExplicitStdin)
     chomp $input;
     return $input;
 }
 
 BEGIN {
-plan (tests => 67);
-print "# Test 1 - Loading the library.\n"
+    plan (tests => 67);
+    print "# Test 1 - Loading the library.\n"
 }
 
 END {print "not ok 1\n" unless $loaded;}
@@ -369,6 +369,7 @@ $test_num++;
 print "# Test $test_num - Check the content source of Celestrak data set.\n";
 skip ($skip_celestrak,
     $skip_celestrak || ($st->content_source || '') eq 'celestrak');
+
 $test_num++;
 print "# Test $test_num - Try to retrieve data from Human Space Flight.\n";
 skip ($skip_spaceflight,

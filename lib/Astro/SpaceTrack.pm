@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.037';
+our $VERSION = '0.038';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -166,7 +166,7 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	radar => {name => 'Radar Calibration'},
 	cubesat => {name => 'CubeSats'},
 	other => {name => 'Other'},
-	},
+    },
     iridium_status => {
 	kelso => {name => 'Celestrak (Kelso)'},
 	mccants => {name => 'McCants'},
@@ -174,12 +174,12 @@ my %catalogs = (	# Catalog names (and other info) for each source.
     },
     spaceflight => {
 	iss => {name => 'International Space Station',
-		url => 'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/ISS/SVPOST.html',
-		},
-	shuttle => {name => 'Current shuttle mission',
-		url => 'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/SHUTTLE/SVPOST.html',
-		},
+	    url => 'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/ISS/SVPOST.html',
 	},
+	shuttle => {name => 'Current shuttle mission',
+	    url => 'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/SHUTTLE/SVPOST.html',
+	},
+    },
     spacetrack => {
 	md5 => {name => 'MD5 checksums', number => 0, special => 1},
 	full => {name => 'Full catalog', number => 1},
@@ -194,8 +194,8 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	amateur => {name => 'Amateur Radio satellites', number => 19},
 	visible => {name => 'Visible satellites', number => 21},
 	special => {name => 'Special satellites', number => 23},
-	},
-    );
+    },
+);
 
 my %mutator = (	# Mutators for the various attributes.
     addendum => \&_mutate_attrib,		# Addendum to banner text.
@@ -217,7 +217,7 @@ my %mutator = (	# Mutators for the various attributes.
     verbose => \&_mutate_attrib,
     webcmd => \&_mutate_attrib,
     with_name => \&_mutate_attrib,
-    );
+);
 # Maybe I really want a cookie_file attribute, which is used to do
 # $self->{agent}->cookie_jar ({file => $self->{cookie_file}, autosave => 1}).
 # We'll want to use a false attribute value to pass an empty hash. Going to
@@ -982,6 +982,9 @@ The BODY_STATUS constants are exportable using the :status tag.
 	},
 #	sladen => undef,	# Not needed; done programmatically.
     );
+    while (my ($key, $val) = each %{$status_portable{kelso}}) {
+	$key and $status_portable{kelso_inverse}{$val} = $key;
+    }
 
     sub iridium_status {
 	my $self = shift;
@@ -1049,8 +1052,12 @@ The BODY_STATUS constants are exportable using the :status tag.
 	    my $fail;
 	    my $re = qr{(\d+)};
 	    local $_ = $resp->content;
-	    s{<em>.*?</em>}{}igms;	# Strip emphasis notes
+####	    s{<em>.*?</em>}{}igms;	# Strip emphasis notes
 	    s/<.*?>//gms;	# Strip markup
+	    # Parenthesized numbers are assumed to represent tumbling
+	    # satellites in the in-service or spare grids.
+	    my %exception;
+	    s/\((\d+)\)/$exception{$1} = BODY_STATUS_IS_TUMBLING; $1/gems;
 	    s/\(.*?\)//g;	# Strip parenthetical comments
 	    foreach (split '\n', $_) {
 		if (m/&lt;-+\s+failed\s+-+&gt;/i) {
@@ -1058,15 +1065,16 @@ The BODY_STATUS constants are exportable using the :status tag.
 		    $re = qr{(\d+)(\w?)};
 		} elsif (s/^\s*(plane\s+\d+)\s*:\s*//i) {
 		    my $plane = $1;
-		    s/^\D+//;	# Strip leading non-digits
-		    s/\s+$//;	# Strip trailing whitespace
+##		    s/^\D+//;	# Strip leading non-digits
+		    s/\b[[:alpha:]].*//;	# Strip trailing comments
+		    s/\s+$//;			# Strip trailing whitespace
 		    my $inx = 0;	# First 11 functional are in service
 		    while (m/$re/g) {
 			my $num = +$1;
 			my $detail = $2;
 			my $id = $oid{$num} or do {
-			    # This is the normal situation for decayed satellites.
-    #			warn "No oid for Iridium $num\n";
+#			    This is normal for decayed satellites.
+#			    warn "No oid for Iridium $num\n";
 			    next;
 			};
 			my $name = "Iridium $num";
@@ -1080,12 +1088,15 @@ The BODY_STATUS constants are exportable using the :status tag.
 				    $plane . ' - Failed on station?',
 				    BODY_STATUS_IS_TUMBLING];
 			    }
-			} elsif ($inx++ > 10) {
-			    $rslt{$id} = [$id, $name, "[S]", $plane,
-				BODY_STATUS_IS_SPARE];
 			} else {
-			    $rslt{$id} = [$id, $name, "[+]", $plane,
-				BODY_STATUS_IS_OPERATIONAL];
+			    my $status = $inx++ > 10 ?
+				BODY_STATUS_IS_SPARE :
+				BODY_STATUS_IS_OPERATIONAL;
+			    exists $exception{$num}
+				and $status = $exception{$num};
+			    $rslt{$id} = [$id, $name,
+				$status_portable{kelso_inverse}{$status},
+				$plane, $status];
 			}
 		    }
 		} elsif (m/Notes:/) {
@@ -1987,7 +1998,7 @@ Requested file  doesn't exist");history.go(-1);
 	    $resp->remove_header ('content-disposition');
 	    $resp->header (
 		'content-type' => 'text/plain',
-    ##	    'content-length' => length ($resp->content),
+##		'content-length' => length ($resp->content),
 	    );
 	    $self->_convert_content ($resp);
 	    $self->_add_pragmata($resp,
@@ -2020,6 +2031,16 @@ sub _add_pragmata {
 	$resp->push_header(pragma => "$name = $value");
     }
     return;
+}
+
+sub _unzip {
+    my ($content) = @_;
+
+    my $output;
+
+    IO::Uncompress::Unzip::unzip(\$content, \$output);
+
+    return $output;
 }
 
 #	_check_cookie looks for our session cookie. If it's found, it returns
