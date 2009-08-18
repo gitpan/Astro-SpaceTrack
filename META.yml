@@ -1,11 +1,12 @@
 ---
 name: Astro-SpaceTrack
-version: 0.040_01
+version: 0.041
 author:
   - Tom Wyant (wyant at cpan dot org)
 abstract: Download satellite orbital elements from Space Track
 license: perl
 resources:
+  bugtracker: https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack
   license: http://dev.perl.org/licenses/
 requires:
   Compress::Zlib: 0
@@ -16,15 +17,15 @@ requires:
   Params::Util: 0.12
   perl: 5.006
 configure_requires:
-  Module::Build: 0.34
+  Module::Build: 0.340201
 dynamic_config: 1
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.040_01
+    version: 0.041
   Astro::SpaceTrack::Parser:
     file: lib/Astro/SpaceTrack/Parser.pm
-generated_by: Module::Build version 0.34
+generated_by: Module::Build version 0.340201
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
   version: 1.4
