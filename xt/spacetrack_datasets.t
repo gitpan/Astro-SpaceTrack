@@ -7,11 +7,6 @@ use Astro::SpaceTrack;
 use LWP::UserAgent;
 use Test;
 
-unless ($ENV{DEVELOPER_TEST}) {
-    print "1..0 # skip Environment variable DEVELOPER_TEST not set.\n";
-    exit;
-}
-
 unless ($ENV{SPACETRACK_USER}) {
     print "1..0 # skip Environment variable SPACETRACK_USER not defined.\n";
     exit;

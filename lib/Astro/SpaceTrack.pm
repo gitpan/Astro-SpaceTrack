@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.044';
+our $VERSION = '0.044_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -354,7 +354,7 @@ sub amsat {
     ) {
 	my $resp = $self->{agent}->get ($url);
 	return $resp unless $resp->is_success;
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
 	my ($tle, @data, $epoch);
 	foreach (split '\n', $resp->content) {
 	    push @data, "$_\n";
@@ -373,7 +373,7 @@ sub amsat {
 	'spacetrack-type' => 'orbit',
 	'spacetrack-source' => 'amsat',
     );
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
     return $resp;
 }
 
@@ -420,11 +420,15 @@ and you must abide by that site's restrictions, which include
 not making the data available to a third party without prior
 permission.
 
-Copyright 2005, 2006, 2007, 2008, 2009 T. R. Wyant (wyant at cpan dot
-org).  All rights reserved.
+Copyright 2005-2010 T. R. Wyant (wyant at cpan dot org).
 
-This module is free software; you can use it, redistribute it
-and/or modify it under the same terms as Perl itself.
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl 5.10.0. For more details, see the full text
+of the licenses in the directory LICENSES.
+
+This program is distributed in the hope that it will be useful, but
+without any warranty; without even the implied warranty of
+merchantability or fitness for a particular purpose.
 @{[$self->{addendum} || '']}
 eod
     }
@@ -479,30 +483,32 @@ As of this release, the following data sets may be direct-fetched only:
 =item 1999-025
 
 This is the debris of Chinese communication satellite Fengyun 1C,
-created by an antisatellite test on January 11 2007. As of March 9
-2009 there are 2375 pieces of debris in the data set.
+created by an antisatellite test on January 11 2007. As of February 21
+2010 there are 2631 pieces of debris in the data set. This is an
+increase from the 2375 recorded on March 9 2009.
 
 =item usa-193-debris
 
 This is the debris of U.S. spy satellite USA-193 shot down by the U.S.
-on February 20 2008. As of March 9 2009 there is only 1 piece of
-debris in the data set, down from a maximum of 173. I presume that when
-this decays, a direct fetch of 'usa-193-debris' will return 404, but
-your guess is as good as mine.
+on February 20 2008. As of February 21 2010 there are no pieces of
+debris in the data set. I noted 1 piece on March 9 2009, but this was an
+error - that piece actually decayed October 9 2008, but I misread the
+data. The maximum was 173. Note that as of February 21 2010 you still
+get the remaining piece when you direct-fetch the data from Celestrak.
 
 =item cosmos-2251-debris
 
 This is the debris of Russian communication satellite Cosmos 2251,
 created by its collision with Iridium 33 on February 10 2009. As of
-March 9 there are 357 pieces of debris in the data set, but
-more are expected.
+February 21 2010 there are 1105 pieces of debris in the data set, up
+from the 357 that had been cataloged as of March 9 2009.
 
 =item iridium-33-debris
 
 This is the debris of U.S. communication satellite Iridium 33, created
-by its collision with Cosmos 2251 on February 10 2009. As of March 9
-2009 there are 159 pieces of debris in the data set, but more are
-expected.
+by its collision with Cosmos 2251 on February 10 2009. As of February 21
+2010 there are 461 pieces of debris in the data set, up from the 159
+that had been cataloged as of March 9 2009.
 
 =back
 
@@ -544,7 +550,7 @@ sub celestrak {
 	return $check;
     }
     $self->_convert_content ($resp);
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
     $resp = $self->_handle_observing_list ($opt, $resp->content);
     return ($resp->is_success || !$self->{fallback}) ? $resp :
 	$self->_celestrak_direct ($opt, $name);
@@ -572,7 +578,7 @@ sub _celestrak_direct {
 	'spacetrack-type' => 'orbit',
 	'spacetrack-source' => 'celestrak',
     );
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
     return $resp;
 }
 
@@ -767,7 +773,7 @@ sub get {
     $self->_add_pragmata($resp,
 	'spacetrack-type' => 'get',
     );
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
     return wantarray ? ($resp, $self->{$name}) : $resp;
 }
 
@@ -873,7 +879,7 @@ eod
 	$self->_add_pragmata($resp,
 	    'spacetrack-type' => 'help',
 	);
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
 	return $resp;
     }
 }
@@ -1143,7 +1149,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 	    'spacetrack-type' => 'iridium-status',
 	    'spacetrack-source' => $fmt,
 	);
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
 	return wantarray ? ($resp, [values %rslt]) : $resp;
     }
 }	# End of local symbol block.
@@ -1188,7 +1194,7 @@ eod
 	    ]);
 
     $resp->is_success or return $resp;
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
 
     $self->_check_cookie () > time ()
 	or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
@@ -1965,7 +1971,7 @@ sub spaceflight {
 	'spacetrack-type' => 'orbit',
 	'spacetrack-source' => 'spaceflight',
     );
-    $self->_dump_headers ($resp) if $self->{dump_headers};
+    $self->_dump_headers( $resp );
     return $resp;
 }
 
@@ -2204,8 +2210,8 @@ use Data::Dumper;
 #	object.
 
 sub _dump_headers {
-    my $self = shift;
-    my $resp = shift;
+    my ( $self, $resp ) = @_;
+    $self->{dump_headers} or return;
     local $Data::Dumper::Terse = 1;
     my $rqst = $resp->request;
     $rqst = ref $rqst ? $rqst->as_string : "undef\n";
@@ -2231,7 +2237,9 @@ sub _dump_headers {
 
 sub _dump_request {
     my ($self, $url, @args) = @_;
-    ($self->{debug_url} || '') =~ m/ \A dump-request: /smx or return;
+    my $display = $self->{dump_headers} & 0x02;
+    my $respond = ( $self->{debug_url} || '' ) =~ m/ \A dump-request: /smx;
+    $display or $respond or return;
     my $dumper = _get_yaml_dumper() or return;
     (my $method = (caller 1)[3]) =~ s/ \A (?: .* :: )? _? //smx;
     my %data = (
@@ -2241,7 +2249,9 @@ sub _dump_request {
     );
     my $yaml = $dumper->( \%data );
     $yaml =~ s/ \n{2,} /\n/smxg;
-    return HTTP::Response->new( RC_OK, undef, undef, $yaml );
+    $display and print $yaml;
+    $respond and return HTTP::Response->new( RC_OK, undef, undef, $yaml );
+    return;
 }
 
 #	_get gets the given path on the domain. Arguments after the
@@ -2271,7 +2281,7 @@ sub _get {
 	my $url = "http://@{[DOMAIN]}/$path";
 	my $resp = $self->_dump_request($url, @args) ||
 	    $self->{agent}->get (($self->{debug_url} || $url) . $cgi);
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
 	return $resp unless $resp->is_success && !$self->{debug_url};
 	local $_ = $resp->content;
 	m/login\.pl/i and do {
@@ -2375,7 +2385,7 @@ sub _handle_observing_list {
 		'spacetrack-source' => 'spacetrack',
 	    );
 	}
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
     }
     return wantarray ? ($resp, \@data) : $resp;
 }
@@ -2618,7 +2628,7 @@ sub _post {
 	my $url = "http://@{[DOMAIN]}/$path";
 	my $resp = $self->_dump_request( $url, @args) ||
 	    $self->{agent}->post ($self->{debug_url} || $url, [@args]);
-	$self->_dump_headers ($resp) if $self->{dump_headers};
+	$self->_dump_headers( $resp );
 	return $resp unless $resp->is_success && !$self->{debug_url};
 	local $_ = $resp->content;
 	m/login\.pl/i and do {
@@ -2911,21 +2921,23 @@ assistance and encouragement.
 
 Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
-=head1 COPYRIGHT
+=head1 COPYRIGHT AND LICENSE
 
-Copyright 2005, 2006, 2007, 2008, 2009 by Thomas R. Wyant, III (F<wyant
-at cpan dot org>). All rights reserved.
+Copyright 2005-2010 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 LICENSE
 
-This module is free software; you can use it, redistribute it
-and/or modify it under the same terms as Perl itself.
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl 5.10.0. For more details, see the full text
+of the licenses in the directory LICENSES.
 
-The data obtained by this module is provided subject to the Space
-Track user agreement (L<http://www.space-track.org/perl/user_agreement.pl>).
+This program is distributed in the hope that it will be useful, but
+without any warranty; without even the implied warranty of
+merchantability or fitness for a particular purpose.
 
-This software is provided without any warranty of any kind, express or
-implied. The author will not be liable for any damages of any sort
-relating in any way to this software.
+The data obtained by this module may be subject to the Space Track user
+agreement (L<http://www.space-track.org/perl/user_agreement.pl>).
 
 =cut
+
+# ex: set textwidth=72 :
