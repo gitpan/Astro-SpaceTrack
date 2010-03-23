@@ -19,10 +19,10 @@ no_index:
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.045
+    version: 0.045_01
   Astro::SpaceTrack::Parser:
     file: lib/Astro/SpaceTrack/Parser.pm
-    version: 0.045
+    version: 0.045_01
 requires:
   Compress::Zlib: 0
   HTML::Parser: 0
@@ -34,4 +34,4 @@ requires:
 resources:
   bugtracker: https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack
   license: http://dev.perl.org/licenses/
-version: 0.045
+version: 0.045_01
