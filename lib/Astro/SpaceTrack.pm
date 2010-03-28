@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.045_01';
+our $VERSION = '0.046';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -239,33 +239,6 @@ set these up.
 
 =cut
 
-my @inifil;
-
-=begin comment
-
-At some point I thought that an initialization file would be a good
-idea. But it seems unlikely to me that anyone will want commands
-other than 'set' commands issued every time an object is instantiated,
-and the 'set' commands are handled by the environment variables. So
-I changed my mind.
-
-my $inifil = $^O eq 'MSWin32' || $^O eq 'VMS' || $^O eq 'MacOS' ?
-    'SpaceTrack.ini' : '.SpaceTrack';
-
-$inifil = $^O eq 'VMS' ? "SYS\$LOGIN:$inifil" :
-    $^O eq 'MacOS' ? $inifil :
-    $ENV{HOME} ? "$ENV{HOME}/$inifil" :
-    $ENV{LOGDIR} ? "$ENV{LOGDIR}/$inifil" : undef or warn <<eod;
-Warning - Can't find home directory. Initialization file will not be
-        executed.
-eod
-
-@inifil = __PACKAGE__->_source ($inifil) if $inifil && -e $inifil;
-
-=end comment
-
-=cut
-
 sub new {
     my ($class, @args) = @_;
     $class = ref $class if ref $class;
@@ -297,12 +270,6 @@ sub new {
     bless $self, $class;
 
     $self->{agent}->env_proxy;
-
-    if (@inifil) {
-	$self->{filter} = 1;
-	$self->shell (@inifil, 'exit');
-	$self->{filter} = 0;
-    }
 
     $ENV{SPACETRACK_OPT} and
 	$self->set (grep {defined $_} split '\s+', $ENV{SPACETRACK_OPT});
@@ -433,6 +400,55 @@ merchantability or fitness for a particular purpose.
 eod
     }
 
+}
+
+=for html <a name="box_score"></a>
+
+=item $resp = $st->box_score ();
+
+This method returns the SATCAT Satellite Box Score information from the
+Space Track web site. If it succeeds, the content will be the actual box
+score data, including headings and totals, with the fields
+tab-delimited.
+
+This method requires a Space Track username and password. It implicitly
+calls the login () method if the session cookie is missing or expired.
+If login () fails, you will get the HTTP::Response from login ().
+
+If this method succeeds, the response will contain headers
+
+ Pragma: spacetrack-type = box_score
+ Pragma: spacetrack-source = spacetrack
+
+There are no options or arguments.
+
+=cut
+
+sub box_score {
+    my ( $self ) = @_;
+
+    my $p = Astro::SpaceTrack::Parser->new ();
+
+    my $resp = $self->_post ( 'perl/boxscore.pl' );
+    return $resp unless $resp->is_success && !$self->{debug_url};
+
+    my $content = $resp->content;
+    $content =~ s/ &nbsp; / /smxg;
+    my @this_page = @{$p->parse_string (table => $content)};
+    ref $this_page[0] eq 'ARRAY'
+	or return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
+	BAD_SPACETRACK_RESPONSE, undef, $content);
+    my @data = @{$this_page[0]};
+    $content = '';
+    foreach my $datum ( @data ) {
+	$content .= join( "\t", @{ $datum } ) . "\n";
+    }
+    $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+    $self->_add_pragmata($resp,
+	'spacetrack-type' => 'box_score',
+	'spacetrack-source' => 'spacetrack',
+    );
+    return wantarray ? ($resp, \@data) : $resp;
 }
 
 
@@ -809,6 +825,8 @@ sub help {
     } else {
 	my $resp = HTTP::Response->new (RC_OK, undef, undef, <<eod);
 The following commands are defined:
+  box_score
+    Retrieve the SATCAT box score. A Space Track login is needed.
   celestrak name
     Retrieves the named catalog of IDs from Celestrak. If the
     direct attribute is false (the default), the corresponding
@@ -835,6 +853,10 @@ The following commands are defined:
   retrieve number ...
     Retieves the latest orbital elements for the given
     catalog numbers.
+  search_date date ...
+    Retrieves orbital elements by launch date.
+  search_decay date ...
+    Retrieves orbital elements by decay date.
   search_id id ...
     Retrieves orbital elements by international designator.
   search_name name ...
@@ -1524,6 +1546,78 @@ sub search_date {
 	    _submit => 'submit',
 	    _submitted => 1,
 	    );
+	}, @args );
+}
+
+
+=for html <a name="search_decay"></a>
+
+=item $resp = $st->search_decay (decay ...)
+
+This method searches the Space Track database for objects decayed on
+the given date. The date is specified as year-month-day, with any
+non-digit being legal as the separator. You can omit -day or specify it
+as 0 to get all decays for the given month. You can omit -month (or
+specify it as 0) as well to get all decays for the given year.
+
+The options are the same as for L</search_date>.
+
+A Space Track username and password are required to use this method.
+
+What you get on success depends on the value specified for the -tle
+option.
+
+Unless you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
+method returns an HTTP::Response object whose content is the relevant
+element sets. It will also have the following headers set:
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
+
+If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
+method returns an HTTP::Response object whose content is the results of
+the relevant search, one line per object found. Within a line the fields
+are tab-delimited, and occur in the same order as the underlying web
+page. The first line of the content is the header lines from the
+underlying web page. It will also have the following headers set:
+
+ Pragma: spacetrack-type = search
+ Pragma: spacetrack-source = spacetrack
+
+If you call this method in list context, the first element of the
+returned object is the aforementioned HTTP::Response object, and the
+second is a reference to an array containing the search results. The
+first element is a reference to an array containing the header lines
+from the web page. Subsequent elements are references to arrays
+containing the actual search results.
+
+=cut
+
+sub search_decay {
+    my ($self, @args) = @_;
+    @args = _parse_search_args (@args);
+    return $self->_search_generic (
+	{
+	    splice => -1,
+	    poster => sub {
+		my ($self, $name, $opt) = @_;
+		my ($year, $month, $day) =
+		    $name =~ m/^(\d+)(?:\D+(\d+)(?:\D+(\d+))?)?/
+			or return;
+		$year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
+		$month ||= 0;
+		$day ||= 0;
+		my $resp = $self->_post ('perl/decay_query.pl',
+		    decay_year => $year,
+		    decay_month => $month,
+		    decay_day => $day,
+		    status => $opt->{status},	# 'all', 'onorbit' or 'decayed'.
+		    exclude => $opt->{exclude},	# ['debris', 'rocket', or both]
+		    _sessionid => '',
+		    _submit => 'Submit',
+		    _submitted => 1,
+		);
+	    },
 	}, @args);
 }
 
@@ -1664,6 +1758,133 @@ sub search_name {
 	    _submit => 'Submit',
 	    );
 	}, @args);
+}
+
+
+=for html <a name="search_oid"></a>
+
+=item $resp = $st->search_oid (name ...)
+
+This method searches the Space Track database for the given Space Track
+IDs (also known as OIDs, hence the method name).
+
+B<Note> that in effect this is just a stupid, inefficient version of
+L<retrieve()|/retrieve>, which does not understand ranges. Unless you
+assert C<-notle>, or call it in list context to get the search data,
+you should simply call L<retrieve()|/retrieve> instead.
+
+In addition to the options available for L</retrieve>, the following
+option may be specified:
+
+ tle
+   specifies that you want TLE data retrieved for all
+   bodies that satisfy the search criteria. This is
+   true by default, but may be negated by specifying
+   -notle ( or { tle => 0 } ). If negated, the content
+   of the response object is the results of the search,
+   one line per body found, with the fields tab-
+   delimited.
+
+If you specify C<-notle>, all other options are ignored, except for
+C<-descending>.
+
+A Space Track username and password are required to use this method.
+
+This method implicitly calls the login () method if the session cookie
+is missing or expired. If login () fails, you will get the
+HTTP::Response from login ().
+
+What you get on success depends on the value specified for the -tle
+option.
+
+Unless you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
+method returns an HTTP::Response object whose content is the relevant
+element sets. It will also have the following headers set:
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
+
+If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
+method returns an HTTP::Response object whose content is the results of
+the relevant search, one line per object found. Within a line the fields
+are tab-delimited, and occur in the same order as the underlying web
+page. The first line of the content is the header lines from the
+underlying web page. It will also have the following headers set:
+
+ Pragma: spacetrack-type = search
+ Pragma: spacetrack-source = spacetrack
+
+If you call this method in list context, the first element of the
+returned object is the aforementioned HTTP::Response object, and the
+second is a reference to an array containing the search results. The
+first element is a reference to an array containing the header lines
+from the web page. Subsequent elements are references to arrays
+containing the actual search results.
+
+=cut
+
+sub search_oid {
+    my ($self, @args) = @_;
+    ref $args[0] eq 'HASH'
+	or @args = _parse_args(
+	[
+	    descending => '(direction of sort)',
+	    'tle!' => '(return TLE data from search (defaults true))'
+	],
+	@args );
+    my $opt = shift @args;
+    exists $opt->{tle} or $opt->{tle} = 1;
+
+    @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
+
+    my $resp = $self->_post ('perl/satcat_id_query.pl',
+	_submitted => 1,
+	_sessionid => '',
+	ids => join( ' ', @args ),
+	desc => ( $opt->{descending} ? 'yes' : '' ),
+	_submit => 'Submit',
+    );
+    $resp->is_success() and not $self->{debug_url}
+	or return $resp;
+    my $content = $resp->content;
+    $content =~ m/ ERROR: \s+ ID \s+ name \s+ query \s+ failed /smx
+	and return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
+    $content =~ s/ &nbsp; / /smxg;
+
+    my $p = Astro::SpaceTrack::Parser->new ();
+    my @this_page = @{$p->parse_string (table => $content)};
+    ref $this_page[0] eq 'ARRAY'
+	or return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
+	BAD_SPACETRACK_RESPONSE, undef, $content);
+
+    my @data = @{$this_page[0]};
+    $content = '';
+    my %id;
+    foreach my $datum ( @data ) {
+	splice @{ $datum }, -2;
+	$datum->[0] =~ m/ \D /smx
+	    or $id{$datum->[0]}++;
+    }
+
+    if ( $opt->{tle} ) {
+	$resp = $self->retrieve( $opt, sort keys %id );
+    } else {
+	$content = '';
+	foreach my $datum ( @data ) {
+	    $content .= join( "\t", @{ $datum } ) . "\n";
+	}
+	$resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'search',
+	    'spacetrack-source' => 'spacetrack',
+	);
+    }
+    wantarray or return $resp;
+
+    foreach my $row ( @data ) {
+	@{ $row } = map { ( defined $_ && $_ ne '' ) ? $_ : undef } @{ $row };
+    }
+    return ( $resp, \@data );
 }
 
 
@@ -2537,12 +2758,40 @@ sub _no_such_catalog {
     );
 }
 
+#	_parse_args parses options off an argument list. The first
+#	argument must be a list reference of options to be parsed.
+#	This list is pairs of values, the first being the Getopt::Long
+#	specification for the option, and the second being a description
+#	of the option suitable for help text. Subsequent arguments are
+#	the arguments list to be parsed. It returns a reference to a
+#	hash containing the options, followed by any remaining
+#	non-option arguments. If the first argument after the list
+#	reference is a hash reference, it simply returns.
+
+sub _parse_args {
+    my ( $lgl_opts, @args ) = @_;
+    ref $args[0] eq 'HASH' and return @args;
+    my %lgl = @{ $lgl_opts };
+    my $opt = {};
+    local @ARGV = @args;
+    GetOptions ($opt, keys %lgl) or croak <<"EOD";
+Error - Legal options are@{[map {(my $q = $_) =~ s/=.*//;
+	$q =~ s/!//;
+	"\n  -$q $lgl{$_}"} sort keys %lgl]}
+with dates being either Perl times, or numeric year-month-day, with any
+non-numeric character valid as punctuation.
+EOD
+    return ( $opt, @ARGV );
+}
+
 #	_parse_retrieve_args parses the retrieve() options off its
-#	arguments, prefixes a reference to the resultant options
-#	hash to the remaining arguments, and returns the resultant
-#	list. If the first argument is a hash reference, it simply
-#	returns its argument list, under the assumption that it
-#	has already been called.
+#	arguments, prefixes a reference to the resultant options hash to
+#	the remaining arguments, and returns the resultant list. If the
+#	first argument is a list reference, it is taken as extra
+#	options, and removed from the argument list. If the next
+#	argument after the list reference (if any) is a hash reference,
+#	it simply returns its argument list, under the assumption that
+#	it has already been called.
 
 my @legal_retrieve_args = (
     descending => '(direction of sort)',
@@ -2551,32 +2800,25 @@ my @legal_retrieve_args = (
     'sort=s' => "type ('catnum' or 'epoch', with 'catnum' the default)",
     'start_epoch=s' => 'date',
 );
+
 sub _parse_retrieve_args {
     my @args = @_;
-    unless (ref ($args[0]) eq 'HASH') {
-	my %lgl = (@legal_retrieve_args,
-	    ref $args[0] eq 'ARRAY' ? @{shift @args} : ());
-	my $opt = {};
-	local @ARGV = @args;
+    my $extra_args = ref $args[0] eq 'ARRAY' ? shift @args : undef;
+    ref $args[0] eq 'HASH' and return @args;
 
-	GetOptions ($opt, keys %lgl) or croak <<eod;
-Error - Legal options are@{[map {(my $q = $_) =~ s/=.*//;
-	$q =~ s/!//;
-	"\n  -$q $lgl{$_}"} sort keys %lgl]}
-with dates being either Perl times, or numeric year-month-day, with any
-non-numeric character valid as punctuation.
-eod
+    my $opt;
+    ( $opt, @args ) = _parse_args(
+	( $extra_args ? [ @legal_retrieve_args, @{ $extra_args } ] :
+	    \@legal_retrieve_args ), @args );
 
-	$opt->{sort} ||= 'catnum';
+    $opt->{sort} ||= 'catnum';
 
-	($opt->{sort} eq 'catnum' || $opt->{sort} eq 'epoch') or die <<eod;
+    ($opt->{sort} eq 'catnum' || $opt->{sort} eq 'epoch') or die <<eod;
 Error - Illegal sort '$opt->{sort}'. You must specify 'catnum'
         (the default) or 'epoch'.
 eod
 
-	@args = ($opt, @ARGV);
-    }
-    return @args;
+    return ( $opt, @args );
 }
 
 #	$opt = _parse_retrieve_dates ($opt);
@@ -2704,10 +2946,16 @@ sub _post {
 #	referenced code needs the name parsed further, it must do so
 #	itself, returning undef if the parse fails.
 
-
 sub _search_generic {
     my ($self, $poster, @args) = @_;
     delete $self->{_pragmata};
+    my $splice = -2;
+    if ( ref $poster eq 'HASH' ) {
+	exists $poster->{splice} and $splice = $poster->{splice};
+	exists $poster->{poster}
+	    or confess 'Programming error - no {poster} key in options hash';
+	$poster = $poster->{poster};
+    }
 
     @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
     my $opt = shift @args;
@@ -2730,8 +2978,10 @@ sub _search_generic {
 	    or return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
 	    BAD_SPACETRACK_RESPONSE, undef, $content);
 	my @data = @{$this_page[0]};
-	foreach my $row (@data) {
-	    pop @$row; pop @$row;
+	if ( $splice ) {
+	    foreach my $row (@data) {
+		splice @{ $row }, $splice;
+	    }
 	}
 	if (@table) {shift @data} else {push @table, shift @data};
 	foreach my $row (@data) {
@@ -2752,6 +3002,9 @@ sub _search_generic {
 	    'spacetrack-type' => 'search',
 	    'spacetrack-source' => 'spacetrack',
 	);
+    }
+    foreach my $row ( @table ) {
+	@{ $row } = map { ( defined $_ && $_ ne '' ) ? $_ : undef } @{ $row };
     }
     return wantarray ? ($resp, \@table) : $resp;
 }
