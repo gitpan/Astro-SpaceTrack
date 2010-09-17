@@ -83,14 +83,14 @@ The following methods should be considered public:
 
 package Astro::SpaceTrack;
 
-use 5.006;
+use 5.006002;
 
 use strict;
 use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.046';
+our $VERSION = '0.047';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -107,8 +107,8 @@ use HTTP::Response;	# Not in the base, but comes with LWP.
 use HTTP::Status qw{RC_NOT_FOUND RC_OK RC_PRECONDITION_FAILED
 	RC_UNAUTHORIZED RC_INTERNAL_SERVER_ERROR};	# Not in the base, but comes with LWP.
 use LWP::UserAgent;	# Not in the base.
-use Params::Util 0.12 qw{_HANDLE _INSTANCE};
 use POSIX qw{strftime};
+use Scalar::Util 1.07 qw{ blessed };
 use Text::ParseWords;
 use Time::Local;
 
@@ -123,7 +123,6 @@ use constant NO_CAT_ID => 'No catalog IDs specified.';
 use constant NO_OBJ_NAME => 'No object name specified.';
 use constant NO_RECORDS => 'No records found.';
 
-use constant DOMAIN => 'www.space-track.org';
 use constant SESSION_PATH => '/';
 use constant SESSION_KEY => 'spacetrack_session';
 
@@ -203,6 +202,7 @@ my %mutator = (	# Mutators for the various attributes.
     cookie_expires => \&_mutate_attrib,
     debug_url => \&_mutate_attrib,	# Force the URL. Undocumented and unsupported.
     direct => \&_mutate_attrib,
+    domain_space_track => \&_mutate_authen,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
     fallback => \&_mutate_attrib,
     filter => \&_mutate_attrib,
@@ -249,6 +249,7 @@ sub new {
 	cookie_expires => 0,
 	debug_url => undef,	# Not turned on
 	direct => 0,	# Do not direct-fetch from redistributors
+	domain_space_track => 'www.space-track.org',
 	dump_headers => 0,	# No dumping.
 	fallback => 0,	# Do not fall back if primary source offline
 	filter => 0,	# Filter mode.
@@ -306,6 +307,9 @@ return, the response object will contain headers
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = amsat
 
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
+
 This method is a web page scraper. any change in the location of the
 web page will break this method.
 
@@ -322,7 +326,7 @@ sub amsat {
 	my $resp = $self->{agent}->get ($url);
 	return $resp unless $resp->is_success;
 	$self->_dump_headers( $resp );
-	my ($tle, @data, $epoch);
+	my @data;
 	foreach (split '\n', $resp->content) {
 	    push @data, "$_\n";
 	    @data == 3 or next;
@@ -373,19 +377,20 @@ benefit of the shell method.
 	$perl_version ||= do {
 	    $] >= 5.01 ? $^V : do {
 		require Config;
-		'v' . $Config::Config{version};
+		'v' . $Config::Config{version};	## no critic (ProhibitPackageVars)
 	    }
 	};
-	return HTTP::Response->new (RC_OK, undef, undef, <<eod);
+	return HTTP::Response->new (RC_OK, undef, undef, <<"EOD");
 
 @{[__PACKAGE__]} version $VERSION
 Perl $perl_version under $^O
 
-You must register with http://@{[DOMAIN]}/ and get a
-username and password before you can make use of this package,
-and you must abide by that site's restrictions, which include
-not making the data available to a third party without prior
-permission.
+This package acquires satellite orbital elements and other data from a
+variety of web sites. It is your responsibility to abide by the terms of
+use of the individual web sites. In particular, to acquire data from
+Space Track (http://$self->{domain_space_track}/) you must register and
+get a username and password, and you may not make the data available to
+a third party without prior permission from Space Track.
 
 Copyright 2005-2010 T. R. Wyant (wyant at cpan dot org).
 
@@ -397,7 +402,7 @@ This program is distributed in the hope that it will be useful, but
 without any warranty; without even the implied warranty of
 merchantability or fitness for a particular purpose.
 @{[$self->{addendum} || '']}
-eod
+EOD
     }
 
 }
@@ -430,7 +435,9 @@ sub box_score {
     my $p = Astro::SpaceTrack::Parser->new ();
 
     my $resp = $self->_post ( 'perl/boxscore.pl' );
-    return $resp unless $resp->is_success && !$self->{debug_url};
+    $resp->is_success()
+	and not $self->{debug_url}
+	or return $resp;
 
     my $content = $resp->content;
     $content =~ s/ &nbsp; / /smxg;
@@ -440,7 +447,13 @@ sub box_score {
 	BAD_SPACETRACK_RESPONSE, undef, $content);
     my @data = @{$this_page[0]};
     $content = '';
+    my $line = 0;
     foreach my $datum ( @data ) {
+	if ( $line++ == 1 ) {
+	    foreach ( @{ $datum } ) {
+		s/ \s* [(] key [)] \s* \z //smxi;
+	    }
+	}
 	$content .= join( "\t", @{ $datum } ) . "\n";
     }
     $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
@@ -464,7 +477,7 @@ list reference to list references  (i.e. a list of lists). Each
 of the list references contains the catalog ID of a satellite or
 other orbiting body and the common name of the body.
 
-If the 'direct' attribute is true, or if the 'fallback' attribute is
+If the C<direct> attribute is true, or if the C<fallback> attribute is
 true and the data are not available from Space Track, the elements will
 be fetched directly from Celestrak, and no login is needed. Otherwise,
 this method implicitly calls the login () method if the session cookie
@@ -473,8 +486,8 @@ fetched from Celestrak. If login () fails, you will get the
 HTTP::Response from login ().
 
 A list of valid names and brief descriptions can be obtained by calling
-$st->names ('celestrak'). If you have set the 'verbose' attribute true
-(e.g. $st->set (verbose => 1)), the content of the error response will
+C<< $st->names ('celestrak') >>. If you have set the C<verbose> attribute true
+(e.g. C<< $st->set (verbose => 1) >>), the content of the error response will
 include this list. Note, however, that this list does not determine what
 can be retrieved; if Dr.  Kelso adds a data set, it can be retrieved
 even if it is not on the list, and if he removes one, being on the list
@@ -487,10 +500,11 @@ is 'stations', since the URL for this is
 L<http://celestrak.com/NORAD/elements/stations.txt>.
 
 The Celestrak web site makes a few items available for direct-fetching
-only (C<$st->set(direct => 1)>, see below.) These are typically debris
-from collisions or explosions. I have not corresponded with Dr. Kelso on
-this, but I think it reasonable to believe that asking Space Track for a
-couple thousand sets of data at once would not be a good thing.
+only (C<< $st->set(direct => 1) >>, see below.) These are typically
+debris from collisions or explosions. I have not corresponded with Dr.
+Kelso on this, but I think it reasonable to believe that asking Space
+Track for a couple thousand sets of data at once would not be a good
+thing.
 
 As of this release, the following data sets may be direct-fetched only:
 
@@ -539,11 +553,14 @@ If this method succeeds, the response will contain headers
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = 
 
-The spacetrack-source will be 'spacetrack' if the TLE data actually came
-from Space Track, or 'celestrak' if the TLE data actually came from
-Celestrak. The former will be the case if the 'direct' attribute is
-false and either the 'fallback' attribute was false or the Space Track
-web site was accessible. Otherwise, the latter will be the case.
+The spacetrack-source will be C<'spacetrack'> if the TLE data actually
+came from Space Track, or C<'celestrak'> if the TLE data actually came
+from Celestrak. The former will be the case if the C<direct> attribute
+is false and either the C<fallback> attribute was false or the Space
+Track web site was accessible. Otherwise, the latter will be the case.
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 You can specify the L</retrieve> options on this method as well, but
 they will have no effect if the 'direct' attribute is true.
@@ -586,9 +603,7 @@ sub _celestrak_direct {
     }
     $self->_convert_content ($resp);
     if ($name eq 'iridium') {
-	$resp->content (join "\n",
-	    map {(my $s = $_) =~ s/\s+\[.\]\s*$//; $s}
-	    split '\n', $resp->content);
+	_celestrak_repack_iridium( $resp );
     }
     $self->_add_pragmata($resp,
 	'spacetrack-type' => 'orbit',
@@ -596,6 +611,17 @@ sub _celestrak_direct {
     );
     $self->_dump_headers( $resp );
     return $resp;
+}
+
+sub _celestrak_repack_iridium {
+    my ( $resp ) = @_;
+    my @content;
+    foreach ( split qr{ \n }smx, $resp->content() ) {
+	s/ \s+ [[] . []] \s* \z //smx;
+	push @content, $_;
+    }
+    $resp->content( join "\n", @content );
+    return;
 }
 
 {	# Local symbol block.
@@ -611,7 +637,7 @@ sub _celestrak_direct {
 	    return $resp;
 	}
 	if (my $loc = $resp->header('Content-Location')) {
-	    if ($loc =~ m/redirect\.htm\?(\d{3});/) {
+	    if ($loc =~ m/ redirect [.] htm [?] ( \d{3} ) ; /smx) {
 		my $msg = "redirected $1";
 		@args and $msg = "@args; $msg";
 		$1 == RC_NOT_FOUND
@@ -627,10 +653,8 @@ sub _celestrak_direct {
 	    return $self->_no_such_catalog(
 		celestrak => $name, $msg);
 	};
-	foreach (split ',', $type) {
-	    s/^\s+//;
-	    s/;.*//;
-	    s/\s+$//;
+	foreach ( _trim( split ',', $type ) ) {
+	    s/ ; .* //smx;
 	    $valid_type{$_} and return;
 	}
 	my $msg = "Content-Type: $type";
@@ -647,19 +671,25 @@ This method takes the given HTTP::Response object and returns the data
 source specified by the 'Pragma: spacetrack-source =' header. What
 values you can expect depend on the content_type (see below) as follows:
 
-If the content_type method returns 'iridium-status', you can expect
-content_source values of 'kelso', 'mccants', or 'sladen', corresponding
-to the main source of the data.
+If the C<content_type()> method returns C<'box_score'>, you can expect
+a content-source value of C<'spacetrack'>.
 
-If the content_type method returns 'orbit', you can expect
-content-source values of 'amsat', 'celestrak', 'spaceflight', or
-'spacetrack', corresponding to the actual source of the TLE data. Note
-that the celestrak() method may return a content_type of
-'spacetrack', if the 'direct' attribute was false,
+If the content_type method returns C<'iridium-status'>, you can expect
+content_source values of C<'kelso'>, C<'mccants'>, or C<'sladen'>,
+corresponding to the main source of the data.
 
-For any other values of content-type, the expected values are undefined.
-In fact, you will probably literally get undef, but the author does not
-commit even to this.
+If the C<content_type()> method returns C<'orbit'>, you can expect
+content-source values of C<'amsat'>, C<'celestrak'>, C<'spaceflight'>,
+or C<'spacetrack'>, corresponding to the actual source of the TLE data.
+Note that the C<celestrak()> method may return a content_type of
+C<'spacetrack'> if the C<direct> attribute is false.
+
+If the C<content_type()> method returns C<'search'>, you can expect a
+content-source value of C<'spacetrack'>.
+
+For any other values of content-type (e.g. C<'get'>, C<'help'>), the
+expected values are undefined.  In fact, you will probably literally get
+undef, but the author does not commit even to this.
 
 If the response object is not provided, it returns the data source
 from the last method call that returned an HTTP::Response object.
@@ -673,7 +703,7 @@ sub content_source {
     my ($self, $resp) = @_;
     defined $resp or return $self->{_pragmata}{'spacetrack-source'};
     foreach ($resp->header ('Pragma')) {
-	m/spacetrack-source = (.+)/i and return $1;
+	m/ spacetrack-source \s+ = \s+ (.+) /smxi and return $1;
     }
     return;
 }
@@ -684,9 +714,12 @@ This method takes the given HTTP::Response object and returns the
 data type specified by the 'Pragma: spacetrack-type =' header. The
 following values are supported:
 
+ 'box_score': The content is the Space Track satellite
+         box score.
  'get': The content is a parameter value.
  'help': The content is help text.
  'orbit': The content is NORAD data sets.
+ 'search': The content is Space Track search results.
  undef: No spacetrack-type pragma was specified. The
         content is something else (typically 'OK').
 
@@ -702,7 +735,7 @@ sub content_type {
     my ($self, $resp) = @_;
     defined $resp or return $self->{_pragmata}{'spacetrack-type'};
     foreach ($resp->header ('Pragma')) {
-	m/spacetrack-type = (.+)/i and return $1;
+	m/ spacetrack-type \s+ = \s+ (.+) /smxi and return $1;
     }
     return;
 }
@@ -734,6 +767,9 @@ If this method succeeds, the response will contain headers
 
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 You can specify the L</retrieve> options on this method as well.
 
@@ -771,26 +807,43 @@ If this method succeeds, the response will contain header
 
  Pragma: spacetrack-type = get
 
+This can be accessed by C<< $st->content_type( $resp ) >>.
+
 See L</Attributes> for the names and functions of the attributes.
 
 =cut
 
 sub get {
-    my $self = shift;
+    my ( $self, $name ) = @_;
     delete $self->{_pragmata};
-    my $name = shift;
-    croak "No attribute name specified. Legal attributes are ",
-	    join (', ', sort keys %mutator), ".\n"
-	unless defined $name;
-    croak "Attribute $name may not be gotten. Legal attributes are ",
-	    join (', ', sort keys %mutator), ".\n"
-	unless $mutator{$name};
-    my $resp = HTTP::Response->new (RC_OK, undef, undef, $self->{$name});
-    $self->_add_pragmata($resp,
+    my $value = $self->getv( $name );
+    my $resp = HTTP::Response->new( RC_OK, undef, undef, $value );
+    $self->_add_pragmata( $resp,
 	'spacetrack-type' => 'get',
     );
     $self->_dump_headers( $resp );
-    return wantarray ? ($resp, $self->{$name}) : $resp;
+    return wantarray ? ($resp, $value ) : $resp;
+}
+
+
+=for html <a name="getv"></a>
+
+=item $value = $st->getv (attrib)
+
+This method returns the value of the given attribute, which is what
+C<get()> should have done.
+
+See L</Attributes> for the names and functions of the attributes.
+
+=cut
+
+sub getv {
+    my ( $self, $name ) = @_;
+    defined $name
+	or croak 'No attribute name specified',
+    $mutator{$name}
+	or croak "No such attribute as '$name'";
+    return $self->{$name};
 }
 
 
@@ -810,6 +863,8 @@ response will contain header
 
  Pragma: spacetrack-type = help
 
+This can be accessed by C<< $st->content_type( $resp ) >>.
+
 Otherwise (i.e. in any case where the response does B<not> contain
 actual help text) this header will be absent.
 
@@ -823,7 +878,7 @@ sub help {
 	    "http://search.cpan.org/~wyant/Astro-SpaceTrack-$VERSION/");
 	return HTTP::Response->new (RC_OK, undef, undef, 'OK');
     } else {
-	my $resp = HTTP::Response->new (RC_OK, undef, undef, <<eod);
+	my $resp = HTTP::Response->new (RC_OK, undef, undef, <<'EOD');
 The following commands are defined:
   box_score
     Retrieve the SATCAT box score. A Space Track login is needed.
@@ -897,7 +952,7 @@ The following commands are defined:
     Space Track.
 The shell supports a pseudo-redirection of standard output,
 using the usual Unix shell syntax (i.e. '>output_file').
-eod
+EOD
 	$self->_add_pragmata($resp,
 	    'spacetrack-type' => 'help',
 	);
@@ -926,6 +981,9 @@ If this method succeeds, the response will contain headers
 
 The spacetrack-source will be 'kelso', 'mccants', or 'sladen', depending
 on the format requested.
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 The source of the data and, to a certain extent, the format of the
 results is determined by the optional $format argument, which defaults
@@ -1051,118 +1109,14 @@ The BODY_STATUS constants are exportable using the :status tag.
 	my $fmt = shift || $self->{iridium_status_format};
 	delete $self->{_pragmata};
 	my %rslt;
-	my $kelso_url = $self->get ('url_iridium_status_kelso')->content;
-	my $resp = $self->{agent}->get ($kelso_url);
-	$resp->is_success or return $resp;
-	foreach my $buffer (split '\n', $resp->content) {
-	    $buffer =~ s/\s+$//;
-	    my $id = substr ($buffer, 0, 5) + 0;
-	    my $name = substr ($buffer, 5);
-	    $name =~ s/\s+(\[[^\]]+])\s*$//;
-	    my $status = $1 || '';
-	    my $portable_status = $status_portable{kelso}{$status};
-	    my $comment;
-	    if ($fmt eq 'kelso' || $fmt eq 'sladen') {
-		$comment = $kelso_comment{$status} || '';
-		}
-	      else {
-		$status = $status_map{kelso}{$fmt}{$status} || '';
-		$status = 'dum' unless $name =~ m/^IRIDIUM/i;
-		$comment = 'Celestrak';
-		}
-	    $name = ucfirst lc $name;
-	    $rslt{$id} = [$id, $name, $status, $comment,
-		$portable_status];
-	}
+	my $resp = $self->_iridium_status_kelso( $fmt, \%rslt );
+	$resp->is_success() or return $resp;
 	if ($fmt eq 'mccants') {
-	    my $mccants_url = $self->get ('url_iridium_status_mccants')->content;
-	    $resp = $self->{agent}->get ($mccants_url);
-	    $resp->is_success or return $resp;
-	    foreach my $buffer (split '\n', $resp->content) {
-		$buffer =~ m/^\s*(\d+)\s+Iridium\s+\S+/ or next;
-		my ($id, $name, $status, $comment) =
-		    map {(my $s = $_) =~ s/\s+$//; $s =~ s/^\s+//; $s || ''}
-		    $buffer =~ m/(.{8})(.{0,15})(.{0,9})(.*)/;
-		my $portable_status =
-		    exists $status_portable{mccants}{$status} ?
-			$status_portable{mccants}{$status} :
-			BODY_STATUS_IS_TUMBLING;
-		$rslt{$id} = [$id, $name, $status, $comment,
-		    $portable_status];
-#0         1         2         3         4         5         6         7
-#01234567890123456789012345678901234567890123456789012345678901234567890
-# 24836   Iridium 914    tum      Failed; was called Iridium 14
-	    }
+	    ( $resp = $self->_iridium_status_mccants( $fmt, \%rslt ) )
+		->is_success() or return $resp;
 	} elsif ($fmt eq 'sladen') {
-	    my $sladen_url = $self->get('url_iridium_status_sladen')->content;
-	    $resp = $self->{agent}->get($sladen_url);
-	    $resp->is_success or return $resp;
-	    my %oid;
-	    my %dummy;
-	    foreach my $id (keys %rslt) {
-		$rslt{$id}[1] =~ m/dummy/i and do {
-		    $dummy{$id} = $rslt{$id};
-		    $dummy{$id}[3] = 'Dummy';
-		    next;
-		};
-		$rslt{$id}[1] =~ m/(\d+)/ or next;
-		$oid{+$1} = $id;
-	    }
-	    %rslt = %dummy;
-	    my $fail;
-	    my $re = qr{(\d+)};
-	    local $_ = $resp->content;
-####	    s{<em>.*?</em>}{}igms;	# Strip emphasis notes
-	    s/<.*?>//gms;	# Strip markup
-	    # Parenthesized numbers are assumed to represent tumbling
-	    # satellites in the in-service or spare grids.
-	    my %exception;
-	    s/\((\d+)\)/$exception{$1} = BODY_STATUS_IS_TUMBLING; $1/gems;
-	    s/\(.*?\)//g;	# Strip parenthetical comments
-	    foreach (split '\n', $_) {
-		if (m/&lt;-+\s+failed\s+-+&gt;/i) {
-		    $fail++;
-		    $re = qr{(\d+)(\w?)};
-		} elsif (s/^\s*(plane\s+\d+)\s*:\s*//i) {
-		    my $plane = $1;
-##		    s/^\D+//;	# Strip leading non-digits
-		    s/\b[[:alpha:]].*//;	# Strip trailing comments
-		    s/\s+$//;			# Strip trailing whitespace
-		    my $inx = 0;	# First 11 functional are in service
-		    while (m/$re/g) {
-			my $num = +$1;
-			my $detail = $2;
-			my $id = $oid{$num} or do {
-#			    This is normal for decayed satellites.
-#			    warn "No oid for Iridium $num\n";
-			    next;
-			};
-			my $name = "Iridium $num";
-			if ($fail) {
-			    if ($detail eq 'd') {
-			    } elsif ($detail eq 't') {
-				$rslt{$id} = [$id, $name, "[-]", $plane,
-				    BODY_STATUS_IS_TUMBLING];
-			    } else {
-				$rslt{$id} = [$id, $name, "[-]",
-				    $plane . ' - Failed on station?',
-				    BODY_STATUS_IS_TUMBLING];
-			    }
-			} else {
-			    my $status = $inx++ > 10 ?
-				BODY_STATUS_IS_SPARE :
-				BODY_STATUS_IS_OPERATIONAL;
-			    exists $exception{$num}
-				and $status = $exception{$num};
-			    $rslt{$id} = [$id, $name,
-				$status_portable{kelso_inverse}{$status},
-				$plane, $status];
-			}
-		    }
-		} elsif (m/Notes:/) {
-		    last;
-		}
-	    }
+	    ( $resp = $self->_iridium_status_sladen( $fmt, \%rslt ) )
+		->is_success() or return $resp;
 	}
 	$resp->content (join '', map {
 		sprintf "%6d   %-15s%-8s %s\n", @{$rslt{$_}}}
@@ -1174,6 +1128,158 @@ The BODY_STATUS constants are exportable using the :status tag.
 	$self->_dump_headers( $resp );
 	return wantarray ? ($resp, [values %rslt]) : $resp;
     }
+
+    # Get Iridium data from Celestrak.
+    sub _iridium_status_kelso {
+	my ( $self, $fmt, $rslt ) = @_;
+	my $resp = $self->{agent}->get(
+	    $self->getv( 'url_iridium_status_kelso' )
+	);
+	$resp->is_success or return $resp;
+	foreach my $buffer (split '\n', $resp->content) {
+	    $buffer =~ s/ \s+ \z //smx;
+	    my $id = substr ($buffer, 0, 5) + 0;
+	    my $name = substr ($buffer, 5);
+	    my $status = '';
+	    $name =~ s/ \s+ ( [[] .+? []] ) \s* \z //smx
+		and $status = $1;
+	    my $portable_status = $status_portable{kelso}{$status};
+	    my $comment;
+	    if ($fmt eq 'kelso' || $fmt eq 'sladen') {
+		$comment = $kelso_comment{$status} || '';
+		}
+	      else {
+		$status = $status_map{kelso}{$fmt}{$status} || '';
+		$status = 'dum' unless $name =~ m/ \A IRIDIUM /smxi;
+		$comment = 'Celestrak';
+		}
+	    $name = ucfirst lc $name;
+	    $rslt->{$id} = [ $id, $name, $status, $comment,
+		$portable_status ];
+	}
+	return $resp;
+    }
+
+    # Get Iridium status from Mike McCants
+    sub _iridium_status_mccants {
+	my ( $self, undef, $rslt ) = @_;	# $fmt arg not used
+	my $resp = $self->{agent}->get(
+	    $self->getv( 'url_iridium_status_mccants' )
+	);
+	$resp->is_success or return $resp;
+	foreach my $buffer (split '\n', $resp->content) {
+	    $buffer =~ m/ \A \s* (\d+) \s+ Iridium \s+ \S+ /smxi
+		or next;
+	    my ($id, $name, $status, $comment) = _trim(
+		$buffer =~ m/ (.{8}) (.{0,15}) (.{0,9}) (.*) /smx
+	    );
+	    my $portable_status =
+		exists $status_portable{mccants}{$status} ?
+		    $status_portable{mccants}{$status} :
+		    BODY_STATUS_IS_TUMBLING;
+	    $rslt->{$id} = [ $id, $name, $status, $comment,
+		$portable_status ];
+#0         1         2         3         4         5         6         7
+#01234567890123456789012345678901234567890123456789012345678901234567890
+# 24836   Iridium 914    tum      Failed; was called Iridium 14
+	}
+	return $resp;
+    }
+
+    my %sladen_interpret_detail = (
+	'' => sub {
+	    my ( $rslt, $id, $name, $plane ) = @_;
+	    $rslt->{$id} = [ $id, $name, '[-]',
+		"$plane - Failed on station?",
+		BODY_STATUS_IS_TUMBLING ];
+	    return;
+	},
+	d => sub {
+	    return;
+	},
+	t => sub {
+	    my ( $rslt, $id, $name, $plane ) = @_;
+	    $rslt->{$id} = [ $id, $name, '[-]', $plane,
+		BODY_STATUS_IS_TUMBLING ];
+	},
+    );
+
+    # Get Iridium status from Rod Sladen.
+    sub _iridium_status_sladen {
+	my ( $self, undef, $rslt ) = @_;	# $fmt arg not used
+
+	my $resp = $self->{agent}->get(
+	    $self->getv( 'url_iridium_status_sladen' )
+	);
+	$resp->is_success or return $resp;
+	my %oid;
+	my %dummy;
+	foreach my $id (keys %{ $rslt } ) {
+	    $rslt->{$id}[1] =~ m/ dummy /smxi and do {
+		$dummy{$id} = $rslt->{$id};
+		$dummy{$id}[3] = 'Dummy';
+		next;
+	    };
+	    $rslt->{$id}[1] =~ m/ (\d+) /smx or next;
+	    $oid{+$1} = $id;
+	}
+	%{ $rslt } = %dummy;
+
+	my $fail;
+	my $re = qr{ (\d+) }smx;
+	local $_ = $resp->content;
+####	s{ <em> .*? </em> }{}smxgi;	# Strip emphasis notes
+	s/ < .*? > //smxg;	# Strip markup
+	# Parenthesized numbers are assumed to represent tumbling
+	# satellites in the in-service or spare grids.
+	my %exception;
+	{	## no critic (ProhibitUnusedCapture)
+	    s< [(] (\d+) [)] >
+		< $exception{$1} = BODY_STATUS_IS_TUMBLING; $1>smxge;
+	}
+	s/ [(] .*? [)] //smxg;	# Strip parenthetical comments
+	foreach (split '\n', $_) {
+	    if (m/ &lt; -+ \s+ failed \s+ -+ &gt; /smxi) {
+		$fail++;
+		$re = qr{ (\d+) (\w?) }smx;
+	    } elsif ( s/ \A \s* ( plane \s+ \d+ ) \s* : \s* //smxi ) {
+		my $plane = $1;
+##		s/ \A \D+ //smx;	# Strip leading non-digits
+		s/ \b [[:alpha:]] .* //smx;	# Strip trailing comments
+		s/ \s+ \z //smx;		# Strip trailing whitespace
+		my $inx = 0;	# First 11 functional are in service
+		while (m/ $re /smxg) {
+		    my $num = +$1;
+		    my $detail = $2;
+		    my $id = $oid{$num} or do {
+#			This is normal for decayed satellites.
+#			warn "No oid for Iridium $num\n";
+			next;
+		    };
+		    my $name = "Iridium $num";
+		    if ($fail) {
+			my $interp = $sladen_interpret_detail{$detail}
+			    || $sladen_interpret_detail{''};
+			$interp->( $rslt, $id, $name, $plane );
+		    } else {
+			my $status = $inx++ > 10 ?
+			    BODY_STATUS_IS_SPARE :
+			    BODY_STATUS_IS_OPERATIONAL;
+			exists $exception{$num}
+			    and $status = $exception{$num};
+			$rslt->{$id} = [ $id, $name,
+			    $status_portable{kelso_inverse}{$status},
+			    $plane, $status ];
+		    }
+		}
+	    } elsif ( m/ Notes: /smx ) {
+		last;
+	    }
+	}
+
+	return $resp;
+    }
+
 }	# End of local symbol block.
 
 
@@ -1201,14 +1307,14 @@ sub login {
     ($self->{username} && $self->{password}) or
 	return HTTP::Response->new (
 	    RC_PRECONDITION_FAILED, NO_CREDENTIALS);
-    $self->{dump_headers} and warn <<eod;
+    $self->{dump_headers} and warn <<"EOD";
 Logging in as $self->{username}.
-eod
+EOD
 
     #	Do not use the _post method to retrieve the session cookie,
     #	unless you like bottomless recursions.
     my $resp = $self->{agent}->post (
-	"http://@{[DOMAIN]}/perl/login.pl", [
+	"http://$self->{domain_space_track}/perl/login.pl", [
 	    username => $self->{username},
 	    password => $self->{password},
 	    _submitted => 1,
@@ -1221,9 +1327,9 @@ eod
     $self->_check_cookie () > time ()
 	or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
 
-    $self->{dump_headers} and warn <<eod;
+    $self->{dump_headers} and warn <<'EOD';
 Login successful.
-eod
+EOD
     return HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
 }
 
@@ -1284,6 +1390,9 @@ If this method succeeds, the response will contain headers
 
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 Number ranges are represented as 'start-end', where both 'start' and
 'end' are catalog numbers. If 'start' > 'end', the numbers will be
@@ -1365,11 +1474,11 @@ sub retrieve {
     push @params, sort => $opt->{sort};
     push @params, descending => $opt->{descending} ? 'yes' : '';
 
-    @args = grep {m/^\d+(?:-\d+)?$/} @args;
+    @args = grep { m/ \A \d+ (?: - \d+)? \z /smx } @args;
 
     @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_CAT_ID);
     my $content = '';
-    local $_;
+    local $_ = undef;
     my $resp;
     while (@args) {
 	my @batch;
@@ -1377,13 +1486,15 @@ sub retrieve {
 	while (@args && $ids < RETRIEVAL_SIZE) {
 	    $ids++;
 	    my ($lo, $hi) = split '-', shift @args;
+	    $lo > 0 or defined $hi or next;
 	    defined $hi and do {
 		($lo, $hi) = ($hi, $lo) if $lo > $hi;
+		$lo or $lo = 1;	# 0 is illegal
 		$hi - $lo >= $self->{max_range} and do {
-		    carp <<eod;
+		    carp <<"EOD";
 Warning - Range $lo-$hi ignored because it is greater than the
 	  currently-set maximum of $self->{max_range}.
-eod
+EOD
 		    next;
 		};
 		$ids += $hi - $lo;
@@ -1406,15 +1517,15 @@ eod
 	);
 	return $resp unless $resp->is_success;
 	$_ = $resp->content;
-	next if m/No records found/i;
-	if (m/ERROR:/) {
+	next if m/ No \s records \s found /smxi;
+	if ( m/ ERROR: /smx ) {
 	    return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
 		"Failed to retrieve IDs @batch.\n",
 		undef, $content);
 	}
-	s|</pre>.*||ms;
-	s|.*<pre>||ms;
-	s|^\n||ms;
+	s{ </pre> .* }{}smx;
+	s{ .* <pre> }{}smx;
+	s{ \A \n }{}smx;
 	$content .= $_;
     }
     $content or return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
@@ -1441,13 +1552,14 @@ specify it as 0) as well to get all launches for the given year.
 A Space Track username and password are required to use this method.
 
 You can specify options for the search as either command-type options
-(e.g. search (-status => 'onorbit', ...)) or as a leading hash reference
-(e.g. search ({status => onorbit}, ...)). If you specify the hash
-reference, option names must be specified in full, without the leading
-'-', and the argument list will not be parsed for command-type options.
-Options that take multiple values (i.e. 'exclude') must have their
-values specified as a hash reference, even if you only specify one value
-- or none at all.
+(e.g. C<< $st->search_date (-status => 'onorbit', ...) >>) or as a
+leading hash reference (e.g.
+C<< $st->search_date ({status => onorbit}, ...) >>). If you specify the
+hash reference, option names must be specified in full, without the
+leading '-', and the argument list will not be parsed for command-type
+options.  Options that take multiple values (i.e. 'exclude') must have
+their values specified as a hash reference, even if you only specify one
+value - or none at all.
 
 If you specify command-type options, they may be abbreviated, as long as
 the abbreviation is unique. Errors in either sort of specification
@@ -1462,6 +1574,13 @@ options may be specified:
    If you specify both as command-style options,
    you may either specify the option more than once,
    or specify the values comma-separated.
+ rcs
+   specifies that the radar cross-section returned by
+   the search is to be appended to the name, in the form
+   --rcs radar_cross_section. If the with_name attribute
+   is false, the radar cross-section will be inserted as
+   the name. Historical rcs data appear NOT to be
+   available.
  status
    specifies the desired status of the returned body
    (or bodies). Must be 'onorbit', 'decayed', or 'all'.
@@ -1491,9 +1610,9 @@ Examples:
     '2005-12-25');
  search_date ( '-notle', '2005-12-25' );
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 What you get on success depends on the value specified for the -tle
 option.
@@ -1504,6 +1623,9 @@ element sets. It will also have the following headers set:
 
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
 method returns an HTTP::Response object whose content is the results of
@@ -1530,7 +1652,7 @@ sub search_date {
     return $self->_search_generic (sub {
 	my ($self, $name, $opt) = @_;
 	my ($year, $month, $day) =
-	    $name =~ m/^(\d+)(?:\D+(\d+)(?:\D+(\d+))?)?/
+	    $name =~ m/ \A (\d+) (?:\D+ (\d+) (?: \D+ (\d+) )? )? /smx
 		or return;
 	$year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
 	$month ||= 0;
@@ -1574,6 +1696,9 @@ element sets. It will also have the following headers set:
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
 
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
+
 If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
 method returns an HTTP::Response object whose content is the results of
 the relevant search, one line per object found. Within a line the fields
@@ -1602,7 +1727,8 @@ sub search_decay {
 	    poster => sub {
 		my ($self, $name, $opt) = @_;
 		my ($year, $month, $day) =
-		    $name =~ m/^(\d+)(?:\D+(\d+)(?:\D+(\d+))?)?/
+		    $name =~ m{ \A (\d+) (?: \D+ (\d+) (?: \D+ (\d+) )?
+			)? }smx
 			or return;
 		$year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
 		$month ||= 0;
@@ -1630,7 +1756,7 @@ This method searches the Space Track database for objects having the
 given international IDs. The international ID is the last two digits of
 the launch year (in the range 1957 through 2056), the three-digit
 sequence number of the launch within the year (with leading zeroes as
-needed), and the piece (A through ZZ, with A typically being the
+needed), and the piece (A through ZZZ, with A typically being the
 payload). You can omit the piece and get all pieces of that launch, or
 omit both the piece and the launch number and get all launches for the
 year. There is no mechanism to restrict the search to a given on-orbit
@@ -1644,7 +1770,7 @@ This method implicitly calls the login () method if the session cookie
 is missing or expired. If login () fails, you will get the
 HTTP::Response from login ().
 
-What you get on success depends on the value specified for the -tle
+What you get on success depends on the value specified for the C<-tle>
 option.
 
 Unless you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
@@ -1653,6 +1779,9 @@ element sets. It will also have the following headers set:
 
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
 method returns an HTTP::Response object whose content is the results of
@@ -1679,7 +1808,8 @@ sub search_id {
     return $self->_search_generic (sub {
 	my ($self, $name, $opt) = @_;
 	my ($year, $number, $piece) =
-	    $name =~ m/^(\d\d)(\d{3})?([[:alpha:]])?$/ or return;
+	    $name =~ m/ \A (\d\d) (\d{3})? ( [[:alpha:]] )? \z /smx
+		or return;
 	$year += $year < 57 ? 2000 : 1900;
 	my $resp = $self->_post ('perl/launch_query.pl',
 	    date_spec => 'number',
@@ -1722,6 +1852,9 @@ element sets. It will also have the following headers set:
 
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
+
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
 
 If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
 method returns an HTTP::Response object whose content is the results of
@@ -1770,12 +1903,19 @@ IDs (also known as OIDs, hence the method name).
 
 B<Note> that in effect this is just a stupid, inefficient version of
 L<retrieve()|/retrieve>, which does not understand ranges. Unless you
-assert C<-notle>, or call it in list context to get the search data,
-you should simply call L<retrieve()|/retrieve> instead.
+assert C<-notle> or C<-rcs>, or call it in list context to get the
+search data, you should simply call L<retrieve()|/retrieve> instead.
 
 In addition to the options available for L</retrieve>, the following
 option may be specified:
 
+ rcs
+   specifies that the radar cross-section returned by
+   the search is to be appended to the name, in the form
+   --rcs radar_cross_section. If the with_name attribute
+   is false, the radar cross-section will be inserted as
+   the name. Historical rcs data appear NOT to be
+   available.
  tle
    specifies that you want TLE data retrieved for all
    bodies that satisfy the search criteria. This is
@@ -1804,6 +1944,9 @@ element sets. It will also have the following headers set:
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
 
+If the C<content_type()> method returns C<'box_score'>, you can expect
+a content-source value of C<'spacetrack'>.
+
 If you explicitly specified C<-notle> (or C<< { tle => 0 } >>), this
 method returns an HTTP::Response object whose content is the results of
 the relevant search, one line per object found. Within a line the fields
@@ -1826,65 +1969,28 @@ containing the actual search results.
 sub search_oid {
     my ($self, @args) = @_;
     ref $args[0] eq 'HASH'
-	or @args = _parse_args(
+	or @args = _parse_retrieve_args(
 	[
-	    descending => '(direction of sort)',
+	    'rcs!' => '(append --rcs radar_cross_section to name)',
 	    'tle!' => '(return TLE data from search (defaults true))'
 	],
 	@args );
     my $opt = shift @args;
     exists $opt->{tle} or $opt->{tle} = 1;
+    my $ids = join ' ', @args;
+    return $self->_search_generic ( \&_search_oid_generic, $opt, $ids );
+}
 
-    @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
-
-    my $resp = $self->_post ('perl/satcat_id_query.pl',
+sub _search_oid_generic {
+    my ( $self, $ids, $opt ) = @_;
+    return $self->_post (
+	'perl/satcat_id_query.pl',
 	_submitted => 1,
 	_sessionid => '',
-	ids => join( ' ', @args ),
+	ids => $ids,
 	desc => ( $opt->{descending} ? 'yes' : '' ),
 	_submit => 'Submit',
     );
-    $resp->is_success() and not $self->{debug_url}
-	or return $resp;
-    my $content = $resp->content;
-    $content =~ m/ ERROR: \s+ ID \s+ name \s+ query \s+ failed /smx
-	and return HTTP::Response->new (RC_NOT_FOUND, NO_RECORDS);
-    $content =~ s/ &nbsp; / /smxg;
-
-    my $p = Astro::SpaceTrack::Parser->new ();
-    my @this_page = @{$p->parse_string (table => $content)};
-    ref $this_page[0] eq 'ARRAY'
-	or return HTTP::Response->new (RC_INTERNAL_SERVER_ERROR,
-	BAD_SPACETRACK_RESPONSE, undef, $content);
-
-    my @data = @{$this_page[0]};
-    $content = '';
-    my %id;
-    foreach my $datum ( @data ) {
-	splice @{ $datum }, -2;
-	$datum->[0] =~ m/ \D /smx
-	    or $id{$datum->[0]}++;
-    }
-
-    if ( $opt->{tle} ) {
-	$resp = $self->retrieve( $opt, sort keys %id );
-    } else {
-	$content = '';
-	foreach my $datum ( @data ) {
-	    $content .= join( "\t", @{ $datum } ) . "\n";
-	}
-	$resp = HTTP::Response->new (RC_OK, undef, undef, $content);
-	$self->_add_pragmata($resp,
-	    'spacetrack-type' => 'search',
-	    'spacetrack-source' => 'spacetrack',
-	);
-    }
-    wantarray or return $resp;
-
-    foreach my $row ( @data ) {
-	@{ $row } = map { ( defined $_ && $_ ne '' ) ? $_ : undef } @{ $row };
-    }
-    return ( $resp, \@data );
 }
 
 
@@ -1905,12 +2011,13 @@ See L</Attributes> for the names and functions of the attributes.
 
 =cut
 
-sub set {
+sub set {	## no critic (ProhibitAmbiguousNames)
     my ($self, @args) = @_;
     delete $self->{_pragmata};
-    croak "@{[__PACKAGE__]}->set (@{[join ', ', map {qq{'$_'}} @args
-	    ]}) requires an even number of arguments"
-	if @args % 2;
+    @args % 2
+	and croak __PACKAGE__, '->set( ',
+	join( ', ', map { "'$_'" } @args ),
+	') requires an even number of arguments';
     while (@args) {
 	my $name = shift @args;
 	croak "Attribute $name may not be set. Legal attributes are ",
@@ -1964,24 +2071,20 @@ Unlike most of the other methods, this one returns nothing.
 
 =cut
 
-my ($read, $print, $out, $rdln);
+my $rdln;
 
 sub shell {
     my @args = @_;
-    my $self = _INSTANCE($args[0], __PACKAGE__) ? shift @args :
-	Astro::SpaceTrack->new (addendum => <<eod);
+    my $self = _instance( $args[0], __PACKAGE__ ) ? shift @args :
+	Astro::SpaceTrack->new (addendum => <<'EOD');
 
 'help' gets you a list of valid commands.
-eod
+EOD
 
     my $prompt = 'SpaceTrack> ';
 
-    $out = \*STDOUT;
-    $print = sub {
-	my $hndl = _HANDLE($_[0]) ? shift : $out;
-	print $hndl @_;
-	return;
-    };
+    my $stdout = \*STDOUT;
+    my $read;
 
     unshift @args, 'banner' if $self->{banner} && !$self->{filter};
     # Perl::Critic wants IO::Interactive::is_interactive() here. But
@@ -1996,80 +2099,91 @@ eod
 	if (@args) {
 	    $buffer = shift @args;
 	} else {
-	    unless ($read) {
-		$interactive ? eval {
+	    $read ||= $interactive ? ( eval {
 		    require Term::ReadLine;
 		    $rdln ||= Term::ReadLine->new (
 			'SpaceTrack orbital element access');
-		    $out = $rdln->OUT || \*STDOUT;
-		    $read = sub {$rdln->readline ($prompt)};
-		} || ($read = sub {print $out $prompt; <STDIN>}):
-		eval {$read = sub {<STDIN>}};
-	    }
+		    $stdout = $rdln->OUT || \*STDOUT;
+		    sub { $rdln->readline ($prompt) };
+		} || sub { print { $stdout } $prompt; return <STDIN> } ) :
+		sub { return<STDIN> };
 	    $buffer = $read->();
 	}
 	last unless defined $buffer;
 
-	chomp $buffer;
-	$buffer =~ s/^\s+//;
-	$buffer =~ s/\s+$//;
+	$buffer =~ s/ \A \s+ //smx;
+	$buffer =~ s/ \s+ \z //smx;
 	next unless $buffer;
-	next if $buffer =~ m/^#/;
+	next if $buffer =~ m/ \A [#] /smx;
 	my @cmdarg = parse_line ('\s+', 0, $buffer);
 	my $redir = '';
-	@cmdarg = map {m/^>/ ? do {$redir = $_; ()} :
-	    $redir =~ m/^>+$/ ? do {$redir .= $_; ()} :
+	@cmdarg = map {m/ \A > /smx ? do {$redir = $_; ()} :
+	    $redir =~ m/ \A >+ \z /smx ? do {$redir .= $_; ()} :
 	    $_} @cmdarg;
-	$redir =~ s/^(>+)~/$1$ENV{HOME}/;
+	$redir =~ s/ \A (>+) ~ /$1$ENV{HOME}/smx;
 	my $verb = lc shift @cmdarg;
 	last if $verb eq 'exit' || $verb eq 'bye';
 	$verb eq 'show' and $verb = 'get';
 	$verb eq 'source' and do {
 	    eval {
 		splice @args, 0, 0, $self->_source (shift @cmdarg);
-	    };
-	    $@ and warn $@;
+		1;
+	    } or warn ( $@ || 'An unknown error occurred' );	## no critic (RequireCarping)
 	    next;
 	};
-	($verb eq 'new' || $verb =~ m/^_/ || $verb eq 'shell' ||
+	($verb eq 'new' || $verb =~ m/ \A _ /smx || $verb eq 'shell' ||
 	    !$self->can ($verb)) and do {
-	    warn <<eod;
+	    warn <<"EOD";
 Verb '$verb' undefined. Use 'help' to get help.
-eod
+EOD
 	    next;
 	};
-	my @fh;
-	$redir and do {
-	    @fh = (IO::File->new ($redir)) or do {warn <<eod; next};
+	my $out;
+	if ( $redir ) {
+	    $out = IO::File->new( $redir ) or do {
+		warn <<"EOD";
 Error - Failed to open $redir
 	$^E
-eod
-	};
+EOD
+		next;
+	    };
+	} else {
+	    $out = $stdout;
+	}
 	my $rslt;
 	if ($verb eq 'get' && @cmdarg == 0) {
 	    $rslt = [];
 	    foreach my $name ($self->attribute_names ()) {
-		my $val = $self->get ($name)->content ();
+		my $val = $self->getv( $name );
 		push @$rslt, defined $val ? "$name $val" : $name;
 	    }
 	} else {
-	    $rslt = eval {$self->$verb (@cmdarg)};
+	    eval {
+		$rslt = $self->$verb (@cmdarg);
+		1;
+	    } or do {
+		warn $@;	## no critic (RequireCarping)
+		next;
+	    };
 	}
-	$@ and do {warn $@; next; };
 	if (ref $rslt eq 'ARRAY') {
-	    foreach (@$rslt) {print "$_\n"}
+	    foreach (@$rslt) {print { $out } "$_\n"}
 	} elsif ($rslt->is_success) {
+	    $self->content_type()
+		or not $self->{filter}
+		or next;
 	    my $content = $rslt->content;
 	    chomp $content;
-	    $print->(@fh, "$content\n")
-		if !$self->{filter} || $self->content_type ();
+	    print { $out } "$content\n";
 	} else {
 	    my $status = $rslt->status_line;
 	    chomp $status;
 	    warn $status, "\n";
 	}
     }
-    $print->("\n") if $interactive && !$self->{filter};
+    $interactive
+	and not $self->{filter}
+	and print { $stdout } "\n";
     return;
 }
 
@@ -2086,7 +2200,7 @@ cannot be read.
 
 # We really just delegate to _source, which unpacks.
 sub source {
-    my $self = _INSTANCE($_[0], __PACKAGE__) ? shift :
+    my $self = _instance( $_[0], __PACKAGE__ ) ? shift :
 	Astro::SpaceTrack->new ();
     $self->shell ($self->_source (@_), 'exit');
     return;
@@ -2137,6 +2251,9 @@ If this method succeeds, the response will contain headers
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spaceflight
 
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
+
 This method is a web page scraper. any change in the location of the
 web pages, or any substantial change in their format, will break this
 method.
@@ -2177,11 +2294,11 @@ sub spaceflight {
 	my $resp = $self->{agent}->get ($url);
 	return $resp unless $resp->is_success;
 	my (@data, $acquire, $effective);
-	foreach (split '\n', $resp->content) {
+	foreach (split qr{ \n }smx, $resp->content) {
 	    chomp;
-	    m{Vector\s+Time\s+\(GMT\):\s+
-		(\d+/\d+/\d+:\d+:\d+\.\d+)}x and do {
-		$effective = "--effective $1";
+	    m{ Vector \s+ Time \s+ [(] GMT [)] : \s+
+		( \d+ / \d+ / \d+ : \d+ : \d+ [.] \d+ )}smx and do {
+		$effective = join ' ', '--effective', $1;
 		next;
 	    };
 	    m/TWO LINE MEAN ELEMENT SET/ and do {
@@ -2190,14 +2307,15 @@ sub spaceflight {
 		next;
 	    };
 	    next unless $acquire;
-	    s/^\s+//;
+	    s/ \A \s+ //smx;
 	    $_ and do {push @data, $_; next};
 	    @data and do {
 		$acquire = undef;
-		(@data == 2 || @data == 3) or next;
-		shift @data
-		    if @data == 3 && !$self->{direct} &&
-			!$self->{with_name};
+		@data == 2 or @data == 3 or next;
+		@data == 3
+		    and not $self->{direct}
+		    and not $self->{with_name}
+		    and shift @data;
 		if ($effective && $opt->{effective}) {
 		    if (@data == 2) {
 			unshift @data, $effective;
@@ -2206,15 +2324,18 @@ sub spaceflight {
 		    }
 		}
 		$effective = undef;
-		my $ix = @data - 2;
-		my $id = substr ($data[$ix], 2, 5) + 0;
-		my $yr = substr ($data[$ix], 18, 2);
-		my $da = substr ($data[$ix], 20, 12);
+		my $id = 0 + substr $data[-2], 2, 5;
+		my $yr = substr $data[-2], 18, 2;
+		my $da = substr $data[-2], 20, 12;
 		$yr += 100 if $yr < 57;
 		my $ep = timegm (0, 0, 0, 1, 0, $yr) + ($da - 1) * 86400;
-		unless (!$opt->{all} && ($opt->{start_epoch} ?
-			($ep > $opt->{end_epoch} || $ep <= $opt->{start_epoch}) :
-			$ep > $now)) {
+		if ( $opt->{all} ||
+		    $opt->{start_epoch} && $ep >= $opt->{start_epoch} &&
+			$ep < $opt->{end_epoch} ||
+		    $ep <= $now ) {
+##		unless (!$opt->{all} && ($opt->{start_epoch} ?
+##			($ep > $opt->{end_epoch} || $ep <= $opt->{start_epoch}) :
+##			$ep > $now)) {
 		    $tle{$id} ||= [];
 		    my @keys = $opt->{descending} ? (-$id, -$ep) : ($id, $ep);
 		    @keys = reverse @keys if $opt->{sort} eq 'epoch';
@@ -2226,8 +2347,8 @@ sub spaceflight {
     }
 
     unless ($opt->{all} || $opt->{start_epoch}) {
-	my $left = $opt->{last5} ? 5 : 1;
-	foreach (values %tle) {splice @$_, $left}
+	my $keep = $opt->{last5} ? 5 : 1;
+	foreach (values %tle) {splice @{ $_ }, $keep}
     }
     $content .= join '',
 	map {$_->[2]}
@@ -2268,8 +2389,11 @@ If this method succeeds, the response will contain headers
  Pragma: spacetrack-type = orbit
  Pragma: spacetrack-source = spacetrack
 
+These can be accessed by C<< $st->content_type( $resp ) >> and
+C<< $st->content_source( $resp ) >> respectively.
+
 Note that when requesting spacetrack data sets by catalog number the
-setting of the 'with_name' attribute is ignored.
+setting of the C<with_name> attribute is ignored.
 
 Assuming success, the content of the response is the literal element
 set requested. Yes, it comes down gzipped, but we unzip it for you.
@@ -2277,20 +2401,20 @@ See the synopsis for sample code to retrieve and print the 'special'
 catalog in three-line format.
 
 A list of valid names and brief descriptions can be obtained by calling
-$st->names ('spacetrack'). If you have set the 'verbose' attribute true
-(e.g. $st->set (verbose => 1)), the content of the error response will
-include this list. Note, however, that this list does not determine what
-can be retrieved; if Space Track adds a data set, it can still be
-retrieved by number, even if it does not appear in the list by either
-number or name. Similarly, if they remove a data set, being on the list
-will not help. If they decide to renumber the data sets, retrieval by
-name will become useless until I get the code updated. The numbers
-correspond to the 'id=' portion of the URL for the dataset on the Space
-Track web site
+C<< $st->names ('spacetrack') >>. If you have set the C<verbose>
+attribute true (e.g. C<< $st->set (verbose => 1) >>), the content of the
+error response will include this list. Note, however, that this list
+does not determine what can be retrieved; if Space Track adds a data
+set, it can still be retrieved by number, even if it does not appear in
+the list by either number or name. Similarly, if they remove a data set,
+being on the list will not help. If they decide to renumber the data
+sets, retrieval by name will become useless until I get the code
+updated. The numbers correspond to the 'id=' portion of the URL for the
+dataset on the Space Track web site
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 =cut
 
@@ -2298,7 +2422,7 @@ sub spacetrack {
     my $self = shift;
     delete $self->{_pragmata};
     my $catnum = shift;
-    $catnum =~ m/\D/ and do {
+    $catnum =~ m/ \D /smx and do {
 	my $info = $catalogs{spacetrack}{$catnum} or
 	    return $self->_no_such_catalog (spacetrack => $catnum);
 	$catnum = $info->{number};
@@ -2328,8 +2452,8 @@ Requested file  doesn't exist");history.go(-1);
 
     ($resp->is_success() && !$self->{debug_url}) and do {
 	my $content = $resp->content ();
-	if ($content =~ m/<html>/) {
-	    if ($content =~ m/Requested file doesn't exist/i) {
+	if ($content =~ m/ <html> /smx) {
+	    if ($content =~ m/ Requested \s file \s doesn't \s exist/smxi) {
 		$resp = HTTP::Response->new (RC_NOT_FOUND,
 		    "The file for catalog $catnum is missing.\n",
 		    undef, $content);
@@ -2394,15 +2518,15 @@ sub _check_cookie {
     $expir = 0;
     $self->{agent}->cookie_jar->scan (sub {
 	$self->{dump_headers} > 1 and _dump_cookie ("_check_cookie:\n", @_);
-	($cookie, $expir) = @_[2, 8] if $_[4] eq DOMAIN &&
+	($cookie, $expir) = @_[2, 8] if $_[4] eq $self->{domain_space_track} &&
 	    $_[3] eq SESSION_PATH && $_[1] eq SESSION_KEY;
 	});
-    $self->{dump_headers} and warn $expir ? <<eod : <<eod;
+    $self->{dump_headers} and warn $expir ? <<"EOD" : <<'EOD';	## no critic (RequireCarping)
 Session cookie: $cookie
 Cookie expiration: @{[strftime '%d-%b-%Y %H:%M:%S', localtime $expir]} ($expir)
-eod
+EOD
 Session cookie not found
-eod
+EOD
     $self->{session_cookie} = $cookie;
     $self->{cookie_expires} = $expir;
     return $expir || 0;
@@ -2413,7 +2537,7 @@ eod
 
 {	# Begin local symbol block
 
-    my $lookfor = $^O eq 'MacOS' ? qr{\012|\015+}ms : qr{\r\n}ms;
+    my $lookfor = $^O eq 'MacOS' ? qr{ \012|\015+ }smx : qr{ \r \n }smx;
 
     sub _convert_content {
 	my ($self, @args) = @_;
@@ -2425,10 +2549,10 @@ eod
 	    # catch this before we get this far, but the buffer check is
 	    # left in in case something else leaks through.
 	    defined $buffer or $buffer = '';
-	    $buffer =~ s|$lookfor|\n|g;
-	    1 while ($buffer =~ s|^\n||ms);
-	    $buffer =~ s|\s+$||ms;
-	    $buffer .= "\n";
+	    $buffer =~ s/$lookfor/\n/smxgo;
+	    1 while ($buffer =~ s/ \A \n+ //smx);
+	    $buffer =~ s/ \s+ \n /\n/smxg;
+	    $buffer =~ m/ \n \z /smx or $buffer .= "\n";
 	    $resp->content ($buffer);
 	    $resp->header (
 		'content-length' => length ($buffer),
@@ -2468,9 +2592,9 @@ use Data::Dumper;
     sub _dump_cookie {
 	my ($prefix, @args) = @_;
 	local $Data::Dumper::Terse = 1;
-	$prefix and warn $prefix;
+	$prefix and warn $prefix;	## no critic (RequireCarping)
 	for (my $inx = 0; $inx < @names; $inx++) {
-	    warn "    $names[$inx] => ", Dumper ($args[$inx]);
+	    warn "    $names[$inx] => ", Dumper ($args[$inx]);	## no critic (RequireCarping)
 	}
 	return;
     }
@@ -2543,19 +2667,22 @@ sub _get {
 	    $cgi .= "&$name=$val";
 	}
     }
-    $cgi and substr ($cgi, 0, 1) = '?';
+    $cgi and substr( $cgi, 0, 1, '?' );
     {	# Single-iteration loop
 	$self->{debug_url} or $self->{cookie_expires} > time () or do {
 	    my $resp = $self->login ();
 	    return $resp unless $resp->is_success;
 	};
-	my $url = "http://@{[DOMAIN]}/$path";
+	my $url = "http://$self->{domain_space_track}/$path";
 	my $resp = $self->_dump_request($url, @args) ||
 	    $self->{agent}->get (($self->{debug_url} || $url) . $cgi);
 	$self->_dump_headers( $resp );
-	return $resp unless $resp->is_success && !$self->{debug_url};
+##	return $resp unless $resp->is_success && !$self->{debug_url};
+	$resp->is_success()
+	    and not $self->{debug_url}
+	    or return $resp;
 	local $_ = $resp->content;
-	m/login\.pl/i and do {
+	m/ login [.] pl /smxi and do {
 	    $self->{cookie_expires} = 0;
 	    redo;
 	};
@@ -2594,11 +2721,16 @@ sub _get {
 	$dumper = $package->can('Dump');
 	return $dumper;
     }
-
-#	_get_yaml_loader retrieves a YAML loader. If one can be found,
+ 
+#	__get_yaml_loader retrieves a YAML loader. If one can be found,
 #	a code reference to it is returned. Otherwise we simply return.
+#
+#	NOTE WELL: This subroutine is for the benefit of
+#	t/spacetrack_request.t, and is called by that code. The leading
+#	double underscore is to flag it to Perl::Critic as package
+#	private rather than module private.
 
-    sub _get_yaml_loader {
+    sub __get_yaml_loader {
 	$loader and return $loader;
 	($package ||= _get_yaml_package()) or return;
 	$loader = $package->can('Load');
@@ -2641,10 +2773,10 @@ sub _handle_observing_list {
     @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
     my $opt = shift;
 
-    foreach (map {split '\n', $_} @args) {
-	s/\s+$//;
-	my ($id) = m/^([\s\d]{5})/ or next;
-	$id =~ m/^\s*\d+$/ or next;
+    foreach (map {split qr{ \n }smx, $_} @args) {
+	s/ \s+ \z //smx;
+	my ( $id ) = m/ \A ( [\s\d]{5} ) /smx or next;
+	$id =~ m/ \A \s* \d+ \z /smx or next;
 	push @catnum, $id;
 	push @data, [$id, substr $_, 5];
     }
@@ -2659,6 +2791,16 @@ sub _handle_observing_list {
 	$self->_dump_headers( $resp );
     }
     return wantarray ? ($resp, \@data) : $resp;
+}
+
+#	_instance takes a variable and a class, and returns true if the
+#	variable is blessed into the class. It returns false for
+#	variables that are not references.
+sub _instance {
+    my ( $object, $class ) = @_;
+    ref $object or return;
+    blessed( $object ) or return;
+    return $object->isa( $class );
 }
 
 #	_mutate_attrib takes the name of an attribute and the new value
@@ -2691,10 +2833,11 @@ sub _mutate_cookie {
     if ($_[0]->{agent} && $_[0]->{agent}->cookie_jar) {
 	if (defined $_[2]) {
 	    $_[0]->{agent}->cookie_jar->set_cookie (0, SESSION_KEY, $_[2],
-		SESSION_PATH, DOMAIN, undef, 1, undef, undef, 1, {});
+		SESSION_PATH, $_[0]{domain_space_track},
+		undef, 1, undef, undef, 1, {});
 	} else {
 	    $_[0]->{agent}->cookie_jar->clear(
-		DOMAIN, SESSION_PATH, SESSION_KEY);
+		$_[0]{domain_space_track}, SESSION_PATH, SESSION_KEY);
 	}
     }
     goto &_mutate_attrib;
@@ -2714,9 +2857,9 @@ sub _mutate_iridium_status_format {
 # This subroutine just does some argument checking and then co-routines
 # off to _mutate_attrib.
 sub _mutate_number {
-    $_[2] =~ m/\D/ and croak <<eod;
+    $_[2] =~ m/ \D /smx and croak <<"EOD";
 Attribute $_[1] must be set to a numeric value.
-eod
+EOD
     goto &_mutate_attrib;
 }
 
@@ -2731,13 +2874,13 @@ my %no_such_name = (
     spacetrack => 'Space Track',
 );
 my %no_such_trail = (
-    spacetrack => <<eod,
+    spacetrack => <<'EOD',
 The Space Track data sets are actually numbered. The given number
 corresponds to the data set without names; if you are requesting data
 sets by number and want names, add 1 to the given number. When
 requesting Space Track data sets by number the 'with_name' attribute is
 ignored.
-eod
+EOD
 );
 sub _no_such_catalog {
     my $self = shift;
@@ -2813,10 +2956,10 @@ sub _parse_retrieve_args {
 
     $opt->{sort} ||= 'catnum';
 
-    ($opt->{sort} eq 'catnum' || $opt->{sort} eq 'epoch') or die <<eod;
+    ($opt->{sort} eq 'catnum' || $opt->{sort} eq 'epoch') or die <<"EOD";
 Error - Illegal sort '$opt->{sort}'. You must specify 'catnum'
         (the default) or 'epoch'.
-eod
+EOD
 
     return ( $opt, @args );
 }
@@ -2840,13 +2983,13 @@ sub _parse_retrieve_dates {
     my $found;
     foreach my $key (qw{end_epoch start_epoch}) {
 	next unless $opt->{$key};
-	$opt->{$key} !~ m/\D/ or
-	    $opt->{$key} =~ m/^(\d+)\D+(\d+)\D+(\d+)$/ and
-		$opt->{$key} = eval {timegm (0, 0, 0, +$3, $2-1, +$1)} or
-	    croak <<eod;
+	$opt->{$key} !~ m/ \D /smx or
+	    $opt->{$key} =~ m/ \A (\d+) \D+ (\d+) \D+ (\d+) \z /smx
+		and $opt->{$key} = eval {timegm (0, 0, 0, +$3, $2-1, +$1)}
+		or croak <<"EOD";
 Error - Illegal date '$opt->{$key}'. Valid dates are a number
 	(interpreted as a Perl date) or numeric year-month-day.
-eod
+EOD
 	$found++;
     }
 
@@ -2855,9 +2998,9 @@ eod
 	    $opt->{start_epoch} ||= $opt->{end_epoch} - 86400;
 	    $opt->{end_epoch} ||= $opt->{start_epoch} + 86400;
 	}
-	$opt->{start_epoch} <= $opt->{end_epoch} or croak <<eod;
+	$opt->{start_epoch} <= $opt->{end_epoch} or croak <<'EOD';
 Error - End epoch must not be before start epoch.
-eod
+EOD
 	unless ($ctl->{perldate}) {
 	    foreach my $key (qw{start_epoch end_epoch}) {
 		$opt->{$key} = [gmtime ($opt->{$key})];
@@ -2876,6 +3019,7 @@ eod
 #	has already been called.
 
 my @legal_search_args = (
+    'rcs!' => '(append --rcs radar_cross_section to name)',
     'tle!' => '(return TLE data from search (defaults true))',
     'status=s' => q{('onorbit', 'decayed', or 'all')},
     'exclude=s@' => q{('debris', 'rocket', or 'debris,rocket')},
@@ -2891,17 +3035,17 @@ sub _parse_search_args {
 
 	my $opt = $args[0];
 	$opt->{status} ||= 'all';
-	$legal_search_status{$opt->{status}} or croak <<eod;
+	$legal_search_status{$opt->{status}} or croak <<"EOD";
 Error - Illegal status '$opt->{status}'. You must specify one of
         @{[join ', ', map {"'$_'"} sort keys %legal_search_status]}
-eod
+EOD
 	$opt->{exclude} ||= [];
 	$opt->{exclude} = [map {split ',', $_} @{$opt->{exclude}}];
 	foreach (@{$opt->{exclude}}) {
-	    $legal_search_exclude{$_} or croak <<eod;
+	    $legal_search_exclude{$_} or croak <<"EOD";
 Error - Illegal exclusion '$_'. You must specify one or more of
         @{[join ', ', map {"'$_'"} sort keys %legal_search_exclude]}
-eod
+EOD
 	}
     }
 
@@ -2919,13 +3063,16 @@ sub _post {
 	    my $resp = $self->login ();
 	    return $resp unless $resp->is_success;
 	};
-	my $url = "http://@{[DOMAIN]}/$path";
+	my $url = "http://$self->{domain_space_track}/$path";
 	my $resp = $self->_dump_request( $url, @args) ||
 	    $self->{agent}->post ($self->{debug_url} || $url, [@args]);
 	$self->_dump_headers( $resp );
-	return $resp unless $resp->is_success && !$self->{debug_url};
+##	return $resp unless $resp->is_success && !$self->{debug_url};
+	$resp->is_success()
+	    and not $self->{debug_url}
+	    or return $resp;
 	local $_ = $resp->content;
-	m/login\.pl/i and do {
+	m/ login [.] pl /smxi and do {
 	    $self->{cookie_expires} = 0;
 	    redo;
 	};
@@ -2949,6 +3096,64 @@ sub _post {
 sub _search_generic {
     my ($self, $poster, @args) = @_;
     delete $self->{_pragmata};
+
+    ref $args[0] eq 'HASH'
+	or @args = _parse_retrieve_args (@args);
+    my $opt = shift @args;
+
+    @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
+
+    my %id;
+    my $resp;
+    $resp = $self->_search_generic_tabulate( \%id, $poster, $opt, @args )
+	and return $resp;
+
+    exists $opt->{tle} or $opt->{tle} = 1;
+    if ( $opt->{tle} ) {
+	my $with_name = $self->getv( 'with_name' );
+	$resp = $self->retrieve ($opt, sort {$a <=> $b} keys %id);
+	if ( $opt->{rcs} ) {
+	    my $content = $resp->content();
+	    my $replace = $with_name ? sub {
+		my ( $newline, $oid ) = @_;
+		return ( $id{$oid} && $id{$oid}[-1] ) ?
+		    sprintf( " --rcs %s\n1%6d", $id{$oid}[-1], $oid ) :
+		    sprintf( "\n1%6d", $oid );
+	    } : sub {
+		my ( $newline, $oid ) = @_;
+		return ( $id{$oid} && $id{$oid}[-1] ) ?
+		    sprintf( "%s--rcs %s\n1%6d", $newline,
+			$id{$oid}[-1], $oid ) :
+		    sprintf( "%s1%6d", $newline, $oid );
+	    };
+	    $content =~ s{ ( \A | \n ) 1 \s* ( \d+ ) }
+		{ $replace->( $1 || '', $2 ) }smxge;
+	    $resp->content( $content );
+	}
+    } else {
+	my $content;
+	foreach my $oid ( sort { $a <=> $b } keys %id ) {
+	    $content .= join( "\t", @{ $id{$oid} } ) . "\n";
+	}
+	$resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'search',
+	    'spacetrack-source' => 'spacetrack',
+	);
+    }
+    wantarray or return $resp;
+    my @table;
+    foreach my $oid ( sort { $a <=> $b } keys %id ) {
+	push @table, [
+	    map { ( defined $_ && $_ ne '' ) ? $_ : undef }
+	    @{ $id{$oid} } ];
+    }
+    return ($resp, \@table);
+}
+
+sub _search_generic_tabulate {
+    my ( $self, $id, $poster, $opt, @args ) = @_;
+
     my $splice = -2;
     if ( ref $poster eq 'HASH' ) {
 	exists $poster->{splice} and $splice = $poster->{splice};
@@ -2956,22 +3161,16 @@ sub _search_generic {
 	    or confess 'Programming error - no {poster} key in options hash';
 	$poster = $poster->{poster};
     }
-
-    @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
-    my $opt = shift @args;
-
-    exists $opt->{tle} or $opt->{tle} = 1;
-
-    @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
     my $p = Astro::SpaceTrack::Parser->new ();
 
-    my @table;
-    my %id;
-    foreach my $name (@args) {
+    foreach my $name ( @args ) {
 	defined (my $resp = $poster->($self, $name, $opt)) or next;
-	return $resp unless $resp->is_success && !$self->{debug_url};
+##	return $resp unless $resp->is_success && !$self->{debug_url};
+	$resp->is_success()
+	    and not $self->{debug_url}
+	    or return $resp;
 	my $content = $resp->content;
-	next if $content =~ m/No results found/i;
+	next if $content =~ m/ No \s results \s found /smxi;
 	$content =~ s/ &nbsp; / /smxg;
 	my @this_page = @{$p->parse_string (table => $content)};
 	ref $this_page[0] eq 'ARRAY'
@@ -2983,30 +3182,22 @@ sub _search_generic {
 		splice @{ $row }, $splice;
 	    }
 	}
-	if (@table) {shift @data} else {push @table, shift @data};
+	if ( $id->{0} ) {
+	    shift @data;
+	} else {
+	    foreach ( @{ $data[0] } ) {
+		s/ \s* [(] key [)] \s* \z //smxi;
+	    }
+	    $id->{0} = shift @data;
+	}
 	foreach my $row (@data) {
-	    push @table, $row unless $id{$row->[0]}++;
+	    my $oid = $row->[0] or next;
+	    $id->{$oid} and next;
+	    $id->{$oid} = $row;
 	}
     }
 
-    my $resp;
-    if ( $opt->{tle} ) {
-	$resp = $self->retrieve ($opt, sort {$a <=> $b} keys %id);
-    } else {
-	my $content;
-	foreach my $datum ( @table ) {
-	    $content .= join( "\t", @{ $datum } ) . "\n";
-	}
-	$resp = HTTP::Response->new (RC_OK, undef, undef, $content);
-	$self->_add_pragmata($resp,
-	    'spacetrack-type' => 'search',
-	    'spacetrack-source' => 'spacetrack',
-	);
-    }
-    foreach my $row ( @table ) {
-	@{ $row } = map { ( defined $_ && $_ ne '' ) ? $_ : undef } @{ $row };
-    }
-    return wantarray ? ($resp, \@table) : $resp;
+    return;
 }
 
 
@@ -3015,17 +3206,30 @@ sub _search_generic {
 
 sub _source {
     my $self = shift;
-    wantarray or die <<eod;
+    wantarray or die <<'EOD';
 Error - _source () called in scalar or no context. This is a bug.
-eod
-    my $fn = shift or die <<eod;
+EOD
+    my $fn = shift or die <<'EOD';
 Error - No source file name specified.
-eod
-    my $fh = IO::File->new ($fn, '<') or die <<eod;
+EOD
+    my $fh = IO::File->new ($fn, '<') or die <<"EOD";
 Error - Failed to open source file '$fn'.
         $!
-eod
+EOD
     return <$fh>;
+}
+
+#	_trim replaces undefined arguments with '', trims all arguments
+#	front and back, and returns the modified arguments.
+
+sub _trim {
+    my @args = @_;
+    foreach ( @args ) {
+	defined $_ or $_ = '';
+	s/ \A \s+ //smx;
+	s/ \s+ \z //smx;
+    }
+    return @args;
 }
 
 1;
@@ -3072,6 +3276,15 @@ methods affected by this are celestrak() and spaceflight().
 
 The default is false (i.e. 0).
 
+=item domain_space_track (string)
+
+This attribute specifies the domain name of the Space Track web site.
+The user will not normally need to modify this, but if the web site
+changes names for some reason, this attribute may provide a way to get
+queries going again.
+
+The default is 'www.space-track.org'.
+
 =item fallback (boolean)
 
 This attribute specifies that orbital elements should be fetched from
@@ -3091,8 +3304,8 @@ The default is false (i.e. 0).
 =item iridium_status_format (string)
 
 This attribute specifies the format of the data returned by the
-L<iridium_status> method. Valid values are 'kelso' and 'mccants'.
-See that method for more information.
+L<iridium_status()|/iridium_status> method. Valid values are 'kelso' and
+'mccants'.  See that method for more information.
 
 The default is 'mccants' for historical reasons, but 'kelso' is probably
 preferred.

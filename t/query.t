@@ -18,7 +18,7 @@ BEGIN {
     };
 }
 
-plan( tests => 92 );
+plan( tests => 107 );
 
 my $st;
 {
@@ -102,6 +102,15 @@ SKIP: {
 	is( $st->content_source(), 'spacetrack',
 	    "Content source is 'spacetrack'" );
 
+	is_success( $st, search_name => -rcs => 'zarya',
+	    "Search for name 'zarya', returning radar cross section"
+	    );
+
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
+
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
+
 	is_success( $st, search_name => -notle => 'zarya',
 	    "Search for name 'zarya', but only retrieve search results"
 	    );
@@ -118,6 +127,14 @@ SKIP: {
 	is( $st->content_source(), 'spacetrack',
 	    "Content source is 'spacetrack'" );
 
+	is_success( $st, search_id => -rcs => '98067A',
+	    "Search for ID '98067A', returning radar cross-section" );
+
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
+
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
+
 	is_success( $st, search_id => -notle => '98067A',
 	    "Search for ID '98067A', but only retrieve search results" );
 
@@ -127,6 +144,14 @@ SKIP: {
 	    "Content source is 'spacetrack'" );
 
 	is_success( $st, search_oid => 25544, "Search for OID 25544" );
+
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
+
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
+
+	is_success( $st, search_oid => -rcs => 25544,
+	    "Search for OID 25544, returning radar cross-section" );
 
 	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
 
@@ -149,6 +174,14 @@ SKIP: {
 	is( $st->content_source(), 'spacetrack',
 	    "Content source is 'spacetrack'" );
 
+	is_success( $st, search_decay => -rcs => '2010-1-10',
+	    'Search for bodies decayed Jan 10 2010, retrieving radar cross-section' );
+
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
+
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
+
 	is_success( $st, search_decay => -notle => '2010-1-10',
 	    'Search for bodies decayed Jan 10 2010, but only retrieve search results' );
 
@@ -157,23 +190,21 @@ SKIP: {
 	is( $st->content_source(), 'spacetrack',
 	    "Content source is 'spacetrack'" );
 
-	TODO: {
+	is_success( $st, search_date => '2006-07-04',
+	    "Search for date '2006-07-04'" );
 
-	    local $TODO = 'Data before 2010/01/01 lost. Being restored.';
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
 
-	    # The actual date search succeeds, returning 29251. But this
-	    # is STS 121, landed 2006-07-17. Until the database is
-	    # rebuilt the retrieval of the latest TLE fails, so the
-	    # whole thing returns a 404.
-	    is_success( $st, search_date => '2006-07-04',
-		"Search for date '2006-07-04'" );
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
 
-	    is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
+	is_success( $st, search_date => -rcs => '2006-07-04',
+	    "Search for date '2006-07-04', retrieving radar cross-section" );
 
-	    is( $st->content_source(), 'spacetrack',
-		"Content source is 'spacetrack'" );
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
 
-	}
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
 
 	is_success( $st, search_date => -notle => '2006-07-04',
 	    "Search for date '2006-07-04', but only retrieve search results" );
@@ -183,19 +214,13 @@ SKIP: {
 	is( $st->content_source(), 'spacetrack',
 	    "Content source is 'spacetrack'" );
 
-	TODO: {
+	is_success( $st, retrieve => -start_epoch => '2006/04/01', 25544,
+	    'Retrieve historical ISS orbital elements' );
 
-	    local $TODO = 'Data before 2010/01/01 lost. Being restored.';
+	is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
 
-	    is_success( $st, retrieve => -start_epoch => '2006/04/01', 25544,
-		'Retrieve historical ISS orbital elements' );
-
-	    is( $st->content_type(), 'orbit', "Content type is 'orbit'" );
-
-	    is( $st->content_source(), 'spacetrack',
-		"Content source is 'spacetrack'" );
-
-	}
+	is( $st->content_source(), 'spacetrack',
+	    "Content source is 'spacetrack'" );
 
 	is_success( $st, 'box_score', 'Retrieve satellite box score' );
 

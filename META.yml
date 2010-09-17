@@ -5,7 +5,7 @@ author:
 build_requires:
   Test::More: 0.4
 dynamic_config: 1
-generated_by: 'Module::Build version 0.3603'
+generated_by: 'Module::Build version 0.3607'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -19,19 +19,30 @@ no_index:
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.046
+    version: 0.047
   Astro::SpaceTrack::Parser:
     file: lib/Astro/SpaceTrack/Parser.pm
-    version: 0.046
+    version: 0.047
 requires:
+  Carp: 0
   Compress::Zlib: 0
+  Data::Dumper: 0
+  Exporter: 0
+  Getopt::Long: 0
   HTML::Parser: 0
   HTTP::Response: 0
   HTTP::Status: 0
+  IO::File: 0
   LWP::UserAgent: 0
-  Params::Util: 0.12
-  perl: 5.006
+  POSIX: 0
+  Scalar::Util: 1.07
+  Text::ParseWords: 0
+  Time::Local: 0
+  constant: 0
+  perl: 5.006002
+  strict: 0
+  warnings: 0
 resources:
   bugtracker: https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack
   license: http://dev.perl.org/licenses/
-version: 0.046
+version: 0.047

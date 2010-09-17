@@ -1,628 +1,1291 @@
 #!/usr/local/bin/perl
-#	Title:	SpaceTrackTk
-#	Author:	T. R. Wyant
-#	Date:	07-Mar-2005
-#	Remarks:
-#		This Perl script provides a Perl/Tk interface to the
-#		Astro::SpaceTrack package. Command arguments are passed to
-#		the instantiated object, so that you can do things like
-#		$ perl SpaceTrackTk 'set username me password secret'
-#		to initialize your session.
+
+use 5.006002;
 
 use strict;
 use warnings;
 
 use Astro::SpaceTrack;
+use IO::File;
 use Tk;
+use Tk::Pane;
 
-our $VERSION = '0.046';
+our $VERSION = '0.047';
 
-my @pad = qw{-padx 5 -pady 5};
+my @pad = qw{ -padx 5 -pady 5 };	# Standard cell padding
 
-my $st = Astro::SpaceTrack->new (@ARGV);
+# Instantiate the Space Track accesor class.
+my $st = Astro::SpaceTrack->new( @ARGV );
 
-my ($mw, $row, $col);
-$row = $col = 0;
-my ($user, $pwd, $rslt);
+# Display the banner text if desired.
+banner();
 
+# Log in.
+login();
 
-#	Display the splash window if we need to.
-
-$st->get ('banner')->content and banner ();
-
-
-#	Display the login window unless 'direct' is set (indicating
-#	we want to fetch data from redistributors) or we already have
-#	enough information for a valid login.
-
-my $direct = $st->get ('direct')->content ? 1 : 0;
-unless ($direct || ($rslt = $st->login ()) && $rslt->is_success) {
-
-    $user = $pwd = '';
-    $mw = MainWindow->new (-title => 'Log in to Space Track');
-
-    $mw->Label (-text => 'Username:')
-	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-    $mw->Entry (-relief => 'sunken', -textvariable => \$user)
-	->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-    $row++; $col = 0;
-    $mw->Label (-text => 'Password:')
-	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-    $mw->Entry (-relief => 'sunken', -textvariable => \$pwd, -show => '*')
-	->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-    $row++; $col = 0;
-    my $bf = $mw->Frame->grid (-row => $row, -column => 0,
-	-columnspan => 2, -sticky => 'ew');
-    $bf->Button (-text => 'Log in', -command => sub {
-	$rslt = $st->login (direct => 0, username => $user, password => $pwd);
-	$rslt->is_success and do {
-	    $mw->destroy;
-	    return;
-	    };
-	$mw->messageBox (-icon => 'error', -type => 'RetryCancel',
-		-title => 'Login failure', -message => $rslt->status_line)
-		eq 'Cancel' and do {
-	    $mw->destroy;
-	    return;
-	    };
-	})
-	->grid (-row => 0, -column => $col++, @pad);
-    $bf->Button (-text => 'Skip login', -command => sub {
-	$st->set (direct => 1);
-	$mw->destroy;
-	})
-	->grid (-row => 0, -column => $col++, @pad);
-
-    MainLoop;
-
-    }
+# Display the main window.
+main_window();
 
 
-#	We are done unless 'direct' is set or we succeeded in
-#	logging in to Space Track.
-
-$direct = $st->get ('direct')->content ? 1 : 0;
-exit unless $direct || $rslt && $rslt->is_success;
-
-
-#	The following main window gets used for everything except
-#	actual data display.
-
-my ($command, $current, $data, $label, $names, $settings);
-$command = $data = $label = '';
-$mw = MainWindow->new (-title => 'Retrieve satellite orbital data');
-
-
-#	Define various widget data.
-
-my %dsdata;	# Detail data.
-
-
-#	It is possible that our data comes from a file. Define the
-#	widget now.
-
-my $dsfile_widget = $mw->Frame;
-$dsfile_widget->Entry (-relief => 'sunken', -textvariable => \$dsdata{file})
-	->grid (-row => 0, -column => 0, -padx => 5);
-$dsfile_widget->Button (-text => 'Find file ...', -command => sub {
-	my $file = $mw->getOpenFile (-filetypes => [
-		['Text files', '.txt', 'TEXT'],
-		['All files', '*'],
-		], -initialfile => $dsdata{$command},
-		-defaultextension => '.txt');
-	$dsdata{file} = $file if $file;
-	})->grid (-row => 0, -column => 1, -padx => 5);
-
-
-#	Define the label and widget for the detail selector. This
-#	is normally a drop list, but varies by data source, and can
-#	even be undefined. We have to define this first because
-#	the data source selector refers to it.
-
-my %dslbl = (
-    celestrak => 'Catalog name:',
-    spacetrack => 'Catalog name:',
-    iridium_status => 'Data source:',
-    file => 'Catalog file:',
-    spaceflight => 'Retrieve all elements:',
-    search_name => 'Name to search for:',
-    search_id => 'International Designator(s):',
-    search_date => 'Launch date (year-month-day):',
-    retrieve => 'Satellite ID(s):',
-    );
-my %dswdgt = (
-    celestrak => $mw->Optionmenu (-options => ($st->names ('celestrak'))[1],
-	-variable => \$dsdata{celestrak}),
-    spacetrack => $mw->Optionmenu (-options => ($st->names ('spacetrack'))[1],
-	-variable => \$dsdata{spacetrack}),
-    iridium_status => $mw->Optionmenu (-options => (
-	    $st->names ('iridium_status'))[1],
-	-variable => \$dsdata{iridium_status}),
-    file => $dsfile_widget,
-    spaceflight => do {my $frame = $mw->Frame;
-		$frame->Checkbutton (-variable => \$dsdata{spaceflight}{all},
-		-relief => 'flat')->grid (
-		    -row => 0, -column => 0, -sticky => 'w', @pad);
-		$frame->Label (-text => 'Retrieve effective date:')->grid(
-		    -row => 0, -column => 1, -sticky => 'e', @pad);
-		$frame->Checkbutton(
-		    -variable => \$dsdata{spaceflight}{effective},
-		    -relief => 'flat')->grid(
-		    -row => 0, -column => 2, -sticky => 'w', @pad);
-		$frame->Label (-text => 'ISS:')->grid (
-		    -row => 0, -column => 3, -sticky => 'e', @pad);
-		$frame->Checkbutton (-variable => \$dsdata{spaceflight}{iss},
-		    -relief => 'flat')->grid (
-		    -row => 0, -column => 4, -sticky => 'w', @pad);
-		$frame->Label (-text => 'Shuttle:')->grid (
-		    -row => 0, -column => 5, -sticky => 'e', @pad);
-		$frame->Checkbutton (-variable => \$dsdata{spaceflight}{sts},
-		    -relief => 'flat')->grid (
-		    -row => 0, -column => 6, -sticky => 'w', @pad);
-		$dsdata{spaceflight}{iss} = $dsdata{spaceflight}{sts} = 1;
-		$frame
-		},
-    search_name => search_options (search_name => 'name'),
-##    search_name => $mw->Entry (-relief => 'sunken',
-##	-textvariable => \$dsdata{search_name}),
-    search_id => $mw->Entry (-relief => 'sunken',
-	-textvariable => \$dsdata{search_id}),
-    search_date => search_options (search_date => 'date'),
-##    search_date => $mw->Entry (-relief => 'sunken',
-##	-textvariable => \$dsdata{search_date}),
-    retrieve => $mw->Entry (-relief => 'sunken',
-	-textvariable => \$dsdata{retrieve}),
-    );
-my %dsxfrm = (
-    search_date => sub {
-	my @rslt;
-	push @rslt, '-status', $dsdata{search_date}{status};
-	my $excl = join ',', grep {$dsdata{search_date}{$_}
-	    } qw{debris rocket};
-	$excl and push @rslt, '-exclude', $excl;
-	push @rslt, $dsdata{search_date}{date};
-	@rslt},
-    search_name => sub {
-	my @rslt;
-	push @rslt, '-status', $dsdata{search_name}{status};
-	my $excl = join ',', grep {$dsdata{search_name}{$_}
-	    } qw{debris rocket};
-	$excl and push @rslt, '-exclude', $excl;
-	push @rslt, $dsdata{search_name}{name};
-	@rslt},
-    spaceflight => sub {
-	my @rslt;
-	push @rslt, '-all' if $dsdata{spaceflight}{all};
-	push @rslt, '-effective' if $dsdata{spaceflight}{effective};
-	push @rslt, 'iss' if $dsdata{spaceflight}{iss};
-	push @rslt, 'shuttle' if $dsdata{spaceflight}{sts};
-	@rslt},
-    retrieve => sub {(split '\s+', $_[0])},
-    );
-
-
-#	The first drop list in the window selects the data source.
-#	Its content depends on whether we are direct-fetching from
-#	a redistributor - if so, we omit any option that comes
-#	directly from Space Track.
-
-my @mainopts = 
-	([  ['Celestrak catalog' => 'celestrak'],
-	    ['Space Track catalog' => 'spacetrack'],
-	    ['Human Space Flight data' => 'spaceflight'],
-	    ['Radio Amateur Satellite Corporation data' => 'amsat'],
-	    ['Iridium Status' => 'iridium_status'],
-	    ['Local file catalog' => 'file'],
-	    ['Space Track name lookup' => 'search_name'],
-	    ['Space Track international designator lookup' => 'search_id'],
-	    ['Space Track launch date lookup' => 'search_date'],
-	    ['Space Track satellite IDs' => 'retrieve'],
-	    ],
-	 [  ['Celestrak catalog' => 'celestrak'],
-	    ['Iridium Status' => 'iridium_status'],
-	    ['Human Space Flight data' => 'spaceflight'],
-	    ['Radio Amateur Satellite Corporation data' => 'amsat'],
-	    ],
-	);
-$row = $col = 0;
-$mw->Label (-text => $direct ? 'Data source:' : 'Object ID source:')
-	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-my $mainwdgt = $mw->Optionmenu (-options => $mainopts[$direct],
-    -variable => \$command, -command => sub {
-	$current and $current->gridForget ();	# Drop current detail widget
-	$label = $dslbl{$command};		# Change label text to suit
-	$current = $dswdgt{$command} or return;	# Get new detail widget.
-	$current->grid (-row => 1, -column => 1, -sticky => 'w', @pad);
-	},
-    )->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-
-
-#	Draw the detail widgets for the currently-selected source.
-
-$row++; $col = 0;
-$label = $dslbl{$command};
-$mw->Label (-textvariable => \$label)
-	->grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$current = $dswdgt{$command};
-$current->grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-
-
-#	If we're direct-fetching, turn on common names. Otherwise
-#	display the common-names checkbox.
-
-{	# Begin local symbol block.
-    $row++;
-    my $widgetrow = $row;
-    my $label = $mw->Label (-text => 'Include common names:');
-    my $check = $mw->Checkbutton (-variable => \$names, -relief => 'flat',
-	-command => sub {$st->set (with_name => $names)});
-    sub common_names {
-	if ($direct) {
-	    $label->gridForget;
-	    $check->gridForget;
-	    }
-	  else {
-	    $label->grid (-row => $widgetrow, -column => 0,
-		-sticky => 'e', @pad);
-	    $check->grid (-row => $widgetrow, -column => 1,
-		-sticky => 'w', @pad);
-	    }
-	$names = !!$st->get ('with_name')->content;
-	return;
-    }
-}	# End local symbol block.
-$direct or common_names ();
-
-
-#	Insert the pushbuttons at the bottom of the window.
-
-$row++; $col = 0;
-my $bf = $mw->Frame->grid (-row => $row, -column => 0,
-    -columnspan => 2, -sticky => 'ew');
-
-
-#	... Exit
-
-$bf->Button (-text => 'Exit', -command => sub {$mw->destroy})
-    ->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-
-
-#	... View data ...
-
-$bf->Button (-text => 'View data ...', -command => sub {
-	my @args = $dsxfrm{$command} ?
-		($dsxfrm{$command}->($dsdata{$command})) :
-		defined $dsdata{$command} ? ($dsdata{$command}) :
-		();
-	$rslt = $st->$command (@args);
-	if ($rslt->is_success) {
-	    my $vw = $mw->Toplevel ();
-	    my $tx = $vw->Scrolled ('Text', -relief => 'sunken',
-		    -scrollbars => 'oe');
-	    $tx->pack (-expand => 1, -fill => 'both');
-	    $tx->insert ('0.0', $rslt->content);
-	    $vw->title ("$command @args");
-	}
-	  else {
-	    $mw->messageBox (-icon => 'error', -type => 'OK',
-		-title => 'Data fetch error', -message => $rslt->status_line);
-	    }
-	})
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-
-
-#	... Save data ...
-
-$bf->Button (-text => 'Save data ...', -command => sub {
-	my $file = $mw->getSaveFile (-filetypes => [
-		['Text files', '.txt', 'TEXT'],
-		['All files', '*'],
-		], -initialfile => $dsdata{$command},
-		-defaultextension => '.txt');
-	return unless defined $file && $file ne '';
-	$rslt = $st->$command ($dsxfrm{$command} ?
-		($dsxfrm{$command}->($dsdata{$command})) :
-		$dsdata{$command});
-	if ($rslt->is_success) {
-	    my $fh;
-	    $fh = FileHandle->new (">$file")
-		and print $fh $rslt->content
-		or $mw->messageBox (-icon => 'error', -type => 'OK',
-		-title => 'File open error', -message => $!);
-	    }
-	  else {
-	    $mw->messageBox (-icon => 'error', -type => 'OK',
-		-title => 'Data fetch error', -message => $rslt->status_line);
-	    }
-	})
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-
-#	... Settings ...
-
-$bf->Button (-text => 'Settings ...', -command => \&settings)
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-
-#	... Help ...
-
-$bf->Button (-text => 'Help ...', -command => sub {
-		$rslt = $st->help ();
-		if ($rslt->is_success && !$st->get ('webcmd')->content) {
-		    my $vw = $mw->Toplevel ();
-		    my $tx = $vw->Scrolled ('Text', -relief => 'sunken',
-			    -scrollbars => 'oe');
-		    $tx->pack (-expand => 1, -fill => 'both');
-		    $tx->insert ('0.0', $rslt->content);
-		    $vw->title ("help");
-		    }
-		})
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
-
-MainLoop;
-
-########################################################################
-
-#	Subroutines
-
-#	banner()
-
-#	Display the splash screen and wait for the user to dismiss it.
-
+# Display the banner text if desired, and wait for the user to dismiss
+# it.
 sub banner {
-    my $mw = MainWindow->new (-title => 'Front Matter');
-    my $text = "SpaceTrackTk $VERSION" . $st->banner->content;
-    $text =~ s/^\s+//s;
-    $text =~ s/[\s\n]+$//s;
-    $mw->Label (-text => $text)->pack (-side => 'top', @pad);
-    $mw->Button (-text => 'OK', -command => sub {$mw->destroy})
-	->pack (-side => 'bottom', @pad);
 
-    MainLoop;
+    $st->getv( 'banner' ) or return;
+
+    my $mw = MainWindow->new( -title => 'Front Matter' );
+    my $text = "SpaceTrackTk $VERSION" . $st->banner->content();
+    $text =~ s/ \A \s+ //smx;
+    $text =~ s/ \s+ \z //smx;
+    $mw->Label( -text => $text )->pack( -side => 'top', @pad );
+    $mw->Button( -text => 'OK', -command => sub { $mw->destroy() } )->
+	pack( -side => 'bottom', @pad );
+
+    MainLoop();
 
     return 1;
 }
 
-#	settings ()
-
-#	Display the settings window.
-
-sub settings {
-if ($settings && Exists ($settings)) {
-    $settings->raise;
-    return;
+sub grid_args {
+    my ( $hash, %arg ) = @_;
+    my %merged = %{ $hash };
+    foreach my $key ( keys %arg ) {
+	$merged{$key} = $arg{$key};
     }
-my %authen = map {$_ => 1} qw{direct username password};
-my %data = (
-    direct => $st->get ('direct')->content,
-    iridium_status_format => $st->get ('iridium_status_format')->content,
-    max_range => $st->get ('max_range')->content,
-    password => $st->get ('password')->content,
-    username => $st->get ('username')->content,
-    verbose => $st->get ('verbose')->content,
-    webcmd => $st->get ('webcmd')->content,
+    my @rslt;
+    while ( my ( $key, $val ) = each %merged ) {
+	push @rslt, "-$key", $val;
+    }
+    exists $hash->{column}
+	and $hash->{column} += ( $merged{columnspan} || 1 );
+    return @rslt;
+}
+
+sub grid_new {
+    my ( $row ) = @_;
+    defined $row or $row = 0;
+    return { row => $row, column => 0, padx => 5, pady => 5 };
+}
+
+sub grid_next_row {
+    my ( $hash, $row ) = @_;
+    if ( defined $row ) {
+	$hash->{row} = $row;
+    } else {
+	$hash->{row}++;
+    }
+    $hash->{column} = 0;
+    return;
+}
+
+# Return true if a login is needed.
+sub login_needed {
+    $st->getv( 'direct' ) and return;
+    my $rslt = $st->login() or return 1;
+    $rslt->is_success() and return;
+    return 1;
+}
+
+# Log in
+sub login {
+
+    login_needed() or return;
+
+    my ( $user, $passwd ) = ( '', '' );
+
+    my $mw = MainWindow->new( -title => 'Log in to Space Track' );
+
+    my $grid = grid_new();
+
+    $mw->Label( -text => 'Username:' )
+	->grid( grid_args( $grid, sticky => 'e' ) );
+    $mw->Entry( -relief => 'sunken', -textvariable => \$user )
+	->grid( grid_args( $grid, sticky => 'w' ) );
+
+    grid_next_row( $grid );
+
+    $mw->Label( -text => 'Password:' )
+	->grid( grid_args( $grid, sticky => 'e' ) );
+    $mw->Entry( -relief => 'sunken', -textvariable => \$passwd,
+	-show => '*' )
+	->grid( grid_args( $grid, sticky => 'w' ) );
+
+    grid_next_row( $grid );
+
+    my $bf = $mw->Frame->grid(
+	grid_args( $grid, columnspan => 2, sticky => 'ew' ) );
+
+    my $bg = grid_new();
+
+    $bf->Button( -text => 'Log in', -command => sub {
+	    my $rslt = $st->login( direct => 0, username => $user,
+		password => $passwd );
+	    $rslt and $rslt->is_success and do {
+		$mw->destroy();
+		return;
+	    };
+	    $mw->messageBox(
+		-icon => 'error', -type => 'RetryCancel',
+		-title => 'Login failure',
+		-message => ( $rslt ? $rslt->status_line() :
+		    'Unknown error' )
+	    ) eq 'Cancel' and do {
+		$mw->destroy();
+		exit;
+	    };
+	    $passwd = '';
+	} )->grid( grid_args( $bg ) );
+
+    $bf->Button( -text => 'Skip login', -command => sub {
+	    $st->set( direct => 1 );
+	    $mw->destroy();
+	    return;
+	} )->grid( grid_args( $bg ) );
+
+    MainLoop();
+
+    return;
+
+}
+
+# Main window
+sub main_window {
+
+    my %data;	# Data
+    my %widget;	# Widget references
+
+    $widget{main_window} = MainWindow->new(
+	-title => 'Retrieve satellite orbital data' );
+
+    # Set up the data frame.
+    my $df = $widget{data_frame} = $widget{main_window}->Frame->pack(
+	-side => 'top', @pad );
+    my $dg = grid_new();
+
+    # Create the data source label and widget, but don't put them in the
+    # data frame yet.
+    $widget{data_source_label} = $df->Label( -text => 'Data source:' );
+    $widget{data_source_widget} = $df->Optionmenu(
+	-variable => \$data{data_source},
+	-command => sub { load_data_frame( \%widget, \%data ) },
     );
-my %old = %data;
-$settings = $mw->Toplevel ();
-$settings->title ('Settings');
+    load_data_source_widget( \%widget );
 
-my ($row, $col) = (0, 0);
-separator ($settings, $row++, 2, 'Access');
+    # Set up the pushbuttons
 
-$settings->Label (-text => 'Direct-fetch (no login):')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Checkbutton (-variable => \$data{direct}, -relief => 'flat')->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    my @buttons;
+    $widget{main_buttons} = \@buttons;
 
-$row++; $col = 0;
-$settings->Label (-text => 'Username:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Entry (-relief => 'sunken',
-	-textvariable => \$data{username})->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
-$row++; $col = 0;
+    my $bf = $widget{main_window}->Frame->pack(
+	-side => 'bottom', @pad );
+    my $bg = grid_new();
 
-$settings->Label (-text => 'Password:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Entry (-relief => 'sunken',
-	-textvariable => \$data{password}, -show => '*')->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    push @buttons, $bf->Button(
+	-text => 'Exit',
+	-command => sub {
+	    $widget{main_window}->destroy()
+	}
+    )->grid( grid_args( $bg ) );
 
-$row++; $col = 0;
-separator ($settings, $row++, 2, 'General settings');
+    push @buttons, $bf->Button(
+	-text => 'View data ...',
+	-command => sub {
+	    my @args = retrieve( \%widget, \%data )
+		or return;
+	    my $content = shift @args;
+	    view_window( \%widget, "@args", $content );
+	},
+    )->grid( grid_args( $bg ) );
 
-$settings->Label (-text => 'Iridium status format:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Optionmenu (-options => [qw{kelso mccants}],
-    -variable => \$data{iridium_status_format})->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    push @buttons, $bf->Button(
+	-text => 'Save data ...',
+	-command => sub {
+	    my $source = $data{data_source};
+	    exists $data{save_file}{$source}
+		or $data{save_file}{$source} = (
+		ref $data{$source} || ! exists $data{$source} ) ?
+		"$source.tle" : "$data{$source}.tle";
+	    my $file = $widget{main_window}->getSaveFile(
+		-filetypes => [
+		    [ 'TLE files', '.tle', 'TEXT' ],
+		    [ 'All files', '*' ],
+		],
+		-initialfile => $data{save_file}{$source},
+		-defaultextension => '.txt',
+		-title => 'Save TLE data',
+	    );
+	    defined $file and $file ne '' or return;
+	    $data{save_file}{$source} = $file;
+	    my @args = retrieve( \%widget, \%data )
+		or return;
+	    my $fh;
+	    $fh = IO::File->new( $file, '>' )
+		and print { $fh } $args[0]
+		or $widget{main_window}->messageBox(
+		-icon => 'error',
+		-type => 'OK',
+		-title => 'File open error',
+		-message => $!,
+	    );
+	    return;
+	},
+    )->grid( grid_args( $bg ) );
 
-$row++; $col = 0;
-$settings->Label (-text => 'Max range:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Entry (-relief => 'sunken',
-	-textvariable => \$data{max_range})->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    push @buttons, $bf->Button(
+	-text => 'Settings ...',
+	-command => sub{ settings( \%widget, \%data ); },
+    )->grid( grid_args( $bg ) );
 
-$row++; $col = 0;
-$settings->Label (-text => 'Verbose errors:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Checkbutton (-variable => \$data{verbose}, -relief => 'flat')->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    # OK, now load the data frame with whatever is appropriate to the
+    # default data source.
+    load_data_frame( \%widget, \%data );
 
-$row++; $col = 0;
-$settings->Label (-text => 'Web command:')->
-    grid (-row => $row, -column => $col++, -sticky => 'e', @pad);
-$settings->Entry (-relief => 'sunken',
-	-textvariable => \$data{webcmd})->
-    grid (-row => $row, -column => $col++, -sticky => 'w', @pad);
+    MainLoop();
 
-$row++; $col = 0;
-my $bf = $settings->Frame->grid (-row => $row, -column => 0,
-    -columnspan => 2, -sticky => 'ew');
+    return;
 
-$bf->Button (-text => 'Save', -command => sub {
-		my $who;
-		foreach my $key (keys %data) {
-		    next if $data{$key} eq $old{$key};
-		    $who ||= $authen{$key};
-		    $st->set ($key, $data{$key});
+}
+
+{
+    my %authen;
+    my %info;
+
+    BEGIN {
+
+	%authen = map { $_ => 1 } qw{ direct password username };
+
+	%info = (
+	    Checkbutton => {
+		default => {
+		    -relief => 'flat',
+		},
+		variable => '-variable',
+	    },
+	    Entry => {
+		default => {
+		    -relief => 'sunken',
+		},
+	    },
+	);
+    }
+
+    my $settings;
+
+    sub settings {
+	my ( $widget, $data ) = @_;
+
+	$settings and Exists( $settings ) and do {
+	    $settings->raise();
+	    return;
+	};
+
+	my %current = map { $_ => $st->getv( $_ ) } qw{ direct
+	    max_range password username verbose webcmd };
+	my %old = %current;
+
+	$settings = $widget->{main_window}->Toplevel(
+	    -title => 'Settings' );
+
+	my $sg = grid_new();
+
+	foreach (
+	    'Access',
+	    [ direct => 'Direct-fetch (no login):', 'Checkbutton' ],
+	    [ username => 'User Name:' ],
+	    [ password => 'Password:', Entry => -show => '*' ],
+	    'General',
+	    [ max_range => 'Maximum range:' ],
+	    [ verbose => 'Verbose Errors:', 'Checkbutton' ],
+	    [ webcmd => 'Web Command:' ],
+	) {
+	    if ( 'ARRAY' eq ref $_ ) {
+		my ( $name, $label, $entry, %args ) = @{ $_ };
+		defined $entry or $entry = 'Entry';
+		if ( $info{$entry}{default} ) {
+		    while(  my ( $key, $val ) = each %{
+			    $info{$entry}{default} } ) {
+			exists $args{$key}
+			    or $args{$key} = $val;
 		    }
-		if ($who) {
-		    $direct = $data{direct} ? 1 : 0;
-		    unless ($direct) {
-			my $rslt = $st->login;
-			$rslt->is_success or do {
-			    $mw->messageBox (-icon => 'error', -type => 'OK',
-				-title => 'Data fetch error',
-				-message => $rslt->status_line);
+		}
+		my $variable = $info{$entry}{variable} || '-textvariable';
+		$settings->Label( -text => $label )->grid(
+		    grid_args( $sg, sticky => 'e' ));
+		$settings->$entry( %args, $variable => \$current{$name} )->grid(
+		    grid_args( $sg, sticky => 'w' ) );
+	    } else {
+		$settings->Label( -text => $_ )->grid(
+		    grid_args( $sg, columnspan => 2, sticky => 'ew' ) );
+	    }
+
+	    grid_next_row( $sg );
+	}
+
+	my $bf = $settings->Frame()->grid(
+	    grid_args( $sg, columnspan => 2, sticky => 'ew' ) );
+	my $bg = grid_new();
+
+	$bf->Button( -text => 'Save', -command => sub {
+		my $re_login;
+		foreach my $key ( keys %current ) {
+		    no warnings qw{ uninitialized };
+		    $current{$key} eq $old{$key} and next;
+		    $re_login ||= $authen{$key};
+		    $st->set( $key => $current{$key} );
+		}
+		if ( $re_login ) {
+		    if ( ! $current{direct} ) {
+			my $rslt = $st->login();
+			$rslt->is_success() or do {
+			    $widget->{main_window}->messageBox(
+				-icon => 'error', -type => 'OK',
+				-title => 'Login failure',
+				-message => $rslt->status_line
+			    );
 			    return;
-			    };
-			}
+			};
 		    }
-		$data{direct} eq $old{direct} or do {
-		    $mainwdgt->options ($mainopts[$direct]);
-		    common_names ();
-		    };
-		$settings->destroy;
-		})
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
+		    load_data_source_widget( $widget );
+		    load_data_frame( $widget, $data );
+		}
+		$settings->destroy();
+	    } )->grid( grid_args( $bg ) );
 
-$bf->Button (-text => 'Cancel', -command => sub {$settings->destroy})
-	->grid (-row => 0, -column => $col++, -sticky => 'ew', @pad);
+	$bf->Button( -text => 'Cancel', -command => sub {
+		$settings->destroy();
+		return;
+	    } )->grid( grid_args( $bg ) );
 
-=begin comment
-
-x addendum
-x banner
-  cookie_expires
-- direct
-x dump_headers
-x filter
-- max_range
-- password
-  session_cookie
-- username
-- verbose
-- webcmd
-x with_name
-
-=end comment
-
-=cut
-
-return;
+	return;
+    }
 }
 
-sub search_options {
-    my ($name, $data) = @_;
-    my $frame = $mw->Frame;
-    $frame->Entry (-relief => 'sunken',
-	-textvariable => \$dsdata{$name}{$data})->grid (
-	-row => 0, -column => 0, @pad);
-    $frame->Optionmenu (-options => [
-	    [All => 'all'],
-	    ['On orbit' => 'onorbit'],
-	    [Decayed => 'decayed'],
-	], -textvariable => \$dsdata{$name}{status})->grid (
-	-row => 0, -column => 1, @pad);
-    $dsdata{$name}{status} = 'all';
-    $frame->Label (-text => ' Exclude:')->grid (
-	-row => 0, -column => 2, @pad);
-    $frame->Checkbutton (-variable => \$dsdata{$name}{debris},
-	-text => 'debris', -relief => 'flat')->grid (
-	-row => 0, -column => 3, -sticky => 'w', @pad);
-    $frame->Checkbutton (-variable => \$dsdata{$name}{rocket},
-	-text => 'rocket', -relief => 'flat')->grid (
-	-row => 0, -column => 4, -sticky => 'w', @pad);
-    $dsdata{$name}{debris} = $dsdata{$name}{rocket} = 0;
-    return $frame
+sub amsat_panel {
+    my ( $widget, $data ) = @_;
+
+    my $dg = grid_new( 1 );
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
 }
 
-sub separator {
-    my ($parent, $row, $span, $text) = @_;
-    my $pnl = $parent->Frame->grid (-row => $row, -column => 0,
-	-columnspan => $span, -sticky => 'ew');
-    $pnl->Label (-text => $text)->
-	grid (-row => 0, -column => 0, -sticky => 'ew');
-    return $pnl;
+sub box_score_panel {
+    my ( $widget, $data ) = @_;
+
+    return;
+}
+
+# Adjust the data panel to request Celestrak data.
+sub celestrak_panel {
+    my ( $widget, $data ) = @_;
+
+    $widget->{celestrak} ||= {
+	label => $widget->{data_frame}->Label( -text => 'Catalog name:'
+	),
+	selector => $widget->{data_frame}->Optionmenu(
+	    -options => ( $st->names( 'celestrak' ) )[1],
+	    -variable => \$data->{celestrak},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{celestrak}{label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{celestrak}{selector}->grid( grid_args( $dg, sticky => 'w')
+	)->raise();
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
+}
+
+# Adjust the data panel to retrieve data specified in a local file.
+sub file_panel {
+    my ( $widget, $data ) = @_;
+
+    $widget->{file} ||= {
+	button => $widget->{data_frame}->Button(
+	    -text => 'Find file ...',
+	    -command => sub {
+		my $file = $widget->{main_window}->getOpenFile(
+		    -filetypes => [
+			[ 'Text files' => '.txt', 'TEXT' ],
+			[ 'All files', '*' ],
+		    ],
+		    -initialfile => $data->{file},
+		    -defaultextension => '.txt',
+		);
+		$file and $data->{file} = $file;
+	    },
+	),
+	value => $widget->{data_frame}->Entry(
+	    -relief => 'sunken',
+	    -state => 'readonly',
+	    -width => 40,
+	    -textvariable => \$data->{file},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{file}{button}->grid( grid_args( $dg, sticky => 'e' )
+	)->raise();
+    $widget->{file}{value}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
+}
+
+# Adjust the data panel to retrieve Iridium status.
+sub iridium_status_panel {
+    my ( $widget, $data ) = @_;
+
+    if ( ! $widget->{iridium_status} ) {
+	$widget->{iridium_status} = {
+	    label => $widget->{data_frame}->Label(
+		-text => 'Data format:' ),
+	    value => $widget->{data_frame}->Optionmenu(
+		-options => ( $st->names( 'iridium_status' ) )[1],
+		-variable => \$data->{iridium_status},
+	    ),
+	};
+    }
+
+    my $dg = grid_new( 1 );
+    $widget->{iridium_status}{label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{iridium_status}{value}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    return;
+
+}
+
+# Adjust the data panel to retrieve data from Space Track by OID.
+sub retrieve_panel {
+    my ( $widget, $data ) = @_;
+
+    $widget->{retrieve} ||= {
+	label => $widget->{data_frame}->Label(
+	    -text => 'Satellite OIDs:'
+	),
+	value => $widget->{data_frame}->Entry(
+	    -relief => 'sunken',
+	    -textvariable => \$data->{retrieve}{value},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{retrieve}{label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{retrieve}{value}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    retrieve_options_widgets( $widget, retrieve => $data, $dg );
+
+    return;
+}
+
+# Adjust the data panel to add widgets to specify the standard Space
+# Track retrieval arguments.
+sub retrieve_args {
+    my ( $data ) = @_;
+    my $val = $data->{retrieve}{value};
+    $val =~ s/ ( \d ) [^-\d]* - [^-\d]* ( \d ) /$1-$2/smxg;
+    return (
+	retrieve_options_args( retrieve => $data ),
+	split qr{ [^\d-]+ }smx, $val
+    );
+}
+
+sub retrieve_options_widgets {
+    my ( $widget, $source, $data, $dg ) = @_;
+
+    $widget->{$source}{last5_label} ||= $widget->{data_frame}->Label(
+	-text => 'Return last 5 data sets:' );
+    $widget->{$source}{last5_value} ||= $widget->{data_frame}->Checkbutton(
+	-relief => 'flat',
+	-variable => \$data->{$source}{last5},
+	-command => sub {
+	    $widget->{$source}{start_value}->configure( -state =>
+		$data->{$source}{last5} ? 'disable' : 'normal' );
+	    $widget->{$source}{end_value}->configure( -state =>
+		$data->{$source}{last5} ? 'disable' : 'normal' );
+	},
+    );
+
+    $widget->{$source}{start_label} ||= $widget->{data_frame}->Label(
+	-text => 'Start epoch (year-month-day):' );
+    $widget->{$source}{start_value} ||= $widget->{data_frame}->Entry(
+	-relief => 'sunken',
+	-textvariable => \$data->{$source}{start_epoch},
+    );
+
+    $widget->{$source}{end_label} ||= $widget->{data_frame}->Label(
+	-text => 'End epoch (year-month-day):' );
+    $widget->{$source}{end_value} ||= $widget->{data_frame}->Entry(
+	-relief => 'sunken',
+	-textvariable => \$data->{$source}{end_epoch},
+    );
+
+    $widget->{$source}{sort_label} ||= $widget->{data_frame}->Label(
+	-text => 'Sort order:' );
+    $widget->{$source}{sort_value} ||= $widget->{data_frame}->Optionmenu(
+	-options => [
+	    [ 'Sort by OID number' => 'catnum' ],
+	    [ 'Sort by epoch' => 'epoch' ],
+	],
+	-variable => \$data->{$source}{sort_type},
+    );
+
+    $widget->{$source}{desc_label} ||= $widget->{data_frame}->Label(
+	-text => 'Sort in descending order:' );
+    $widget->{$source}{desc_value} ||= $widget->{data_frame}->Checkbutton(
+	-relief => 'flat',
+	-variable => \$data->{$source}{descending},
+    );
+
+    grid_next_row( $dg );
+    $widget->{$source}{last5_label}->grid(
+	grid_args( $dg, sticky => 'e') );
+    $widget->{$source}{last5_value}->grid(
+	grid_args( $dg, sticky => 'w') )->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{start_label}->grid(
+	grid_args( $dg, sticky => 'e') );
+    $widget->{$source}{start_value}->grid(
+	grid_args( $dg, sticky => 'w') )->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{end_label}->grid(
+	grid_args( $dg, sticky => 'e') );
+    $widget->{$source}{end_value}->grid(
+	grid_args( $dg, sticky => 'w') )->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{sort_label}->grid(
+	grid_args( $dg, sticky => 'e') );
+    $widget->{$source}{sort_value}->grid(
+	grid_args( $dg, sticky => 'w') )->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{desc_label}->grid(
+	grid_args( $dg, sticky => 'e') );
+    $widget->{$source}{desc_value}->grid(
+	grid_args( $dg, sticky => 'w') )->raise();
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
+}
+
+# Adjust the state of the standard Space Track retrieval widgets.
+sub retrieve_options_widgets_state {
+    my ( $widget, $source, $data ) = @_;
+
+    my $state = ( exists $data->{$source}{retrieve_tle}
+	&& ! $data->{$source}{retrieve_tle} ) ? 'disable' : 'normal';
+
+    foreach my $name ( qw{ last5_value sort_value desc_value
+	retrieve_rcs_value } ) {
+	exists $widget->{$source}{$name} or next;
+	$widget->{$source}{$name}->configure( -state => $state );
+    }
+
+    $data->{$source}{last5} and $state = 'disable';
+
+    foreach my $name ( qw{ start_value end_value } ) {
+	exists $widget->{$source}{$name} or next;
+	$widget->{$source}{$name}->configure( -state => $state );
+    }
+
+    return;
+}
+
+# Return the standard Space Track retrieval arguments.
+sub retrieve_options_args {
+    my ( $source, $data ) = @_;
+    my @rslt;
+
+    exists $data->{$source}{retrieve_tle}
+	and not $data->{$source}{retrieve_tle}
+	and return @rslt;
+
+    if ( $data->{$source}{last5} ) {
+	push @rslt, '-last5';
+    } else {
+	$data->{$source}{start_epoch}
+	    and push @rslt, '-start_epoch', $data->{$source}{start_epoch};
+	$data->{$source}{end_epoch}
+	    and push @rslt, '-end_epoch', $data->{$source}{end_epoch};
+    }
+    $data->{$source}{sort_type}
+	and push @rslt, '-sort', $data->{$source}{sort_type};
+    $data->{$source}{descending} and push @rslt, '-descending';
+
+    return @rslt;
+
+}
+
+# Adjust the data panel to search for a date.
+sub search_generic_date_panel {
+    my ( $widget, $data, $source, $label ) = @_;
+
+    $widget->{$source} ||= {
+	year_label => $widget->{data_frame}->Label(
+	    -text => "$label year:"
+	),
+	year => $widget->{data_frame}->Optionmenu(
+	    -options => [ reverse 1959 .. ( localtime )[5] + 1900 ],
+	    -variable => \$data->{$source}{year},
+	),
+	month_label => $widget->{data_frame}->Label(
+	    -text => "$label month:"
+	),
+	month => $widget->{data_frame}->Optionmenu(
+	    -options => [ '', 1 .. 12 ],
+	    -variable => \$data->{$source}{month},
+	),
+	day_label => $widget->{data_frame}->Label(
+	    -text => "$label day:"
+	),
+	day => $widget->{data_frame}->Optionmenu(
+	    -options => [ '', 1 .. 31 ],
+	    -variable => \$data->{$source}{day},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{$source}{year_label}->grid( grid_args(
+	    $dg, sticky => 'e' ) );
+    $widget->{$source}{year}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{month_label}->grid( grid_args(
+	    $dg, sticky => 'e' ) );
+    $widget->{$source}{month}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{day_label}->grid( grid_args(
+	    $dg, sticky => 'e' ) );
+    $widget->{$source}{day}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    search_options_widgets( $widget, $source => $data, $dg );
+
+    return;
+}
+
+# Return the arguments for a generic Space Track date search.
+sub search_generic_date_args {
+    my ( $data ) = @_;
+    my $source = $data->{data_source};
+    my @date;
+    foreach my $unit ( qw{ year month day } ) {
+	defined( my $val = $data->{$source}{$unit} ) or last;
+	$val eq '' and last;
+	push @date, $val;
+    }
+    return (
+	search_options_args( $source => $data ),
+	retrieve_options_args( $source => $data ),
+	join '-', @date
+    );
+}
+
+# Adjust the data panel for a generic Space Track search.
+sub search_generic_panel {
+    my ( $widget, $data, $source, $label, $opt ) = @_;
+
+    $widget->{$source} ||= {
+	label => $widget->{data_frame}->Label(
+	    -text => $label
+	),
+	value => $widget->{data_frame}->Entry(
+	    -relief => 'sunken',
+	    -textvariable => \$data->{$source}{value},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{$source}{label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{$source}{value}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+
+    search_options_widgets( $widget, $source => $data, $dg, $opt );
+
+    return;
+}
+
+# Return the arguments for a generic Space Track search.
+sub search_generic_args {
+    my ( $data ) = @_;
+    my $source = $data->{data_source};
+    return (
+	search_options_args( $source => $data ),
+	retrieve_options_args( $source => $data ),
+	split qr{ [\s,;]+ }smx, $data->{$source}{value}
+    );
+}
+
+# Adjust the data panel to search Space Track for satellites by launch
+# date.
+sub search_date_panel {
+    my ( $widget, $data ) = @_;
+
+    search_generic_date_panel( $widget, $data,
+	search_date => 'Launch' );
+
+    return;
+}
+
+# Return the arguments for the search_date() method.
+sub search_date_args {
+    goto &search_generic_date_args;
+}
+
+# Adjust the data panel to search Space Track for satellites by decay
+# date.
+sub search_decay_panel {
+    my ( $widget, $data ) = @_;
+
+    search_generic_date_panel( $widget, $data,
+	search_decay => 'Decay' );
+
+    return;
+}
+
+# Return the arguments for the search_decay() method.
+sub search_decay_args {
+    goto &search_generic_date_args;
+}
+
+# Adjust the data panel to search Space Track for satellites by
+# international launch designator.
+sub search_id_panel {
+    my ( $widget, $data ) = @_;
+
+    search_generic_panel( $widget, $data,
+	search_id => 'International launch ID to search for:' );
+
+    return;
+}
+
+# Return the arguments for the search_id() method.
+sub search_id_args {
+    goto &search_generic_args;
+}
+
+# Adjust the data panel to search Space Track for satellites by common
+# name.
+sub search_name_panel {
+    my ( $widget, $data ) = @_;
+
+    search_generic_panel( $widget, $data,
+	search_name => 'Names to search for:' );
+
+    return;
+}
+
+# Return the arguments for the search_name method.
+sub search_name_args {
+    goto &search_generic_args;
+}
+
+# Adjust the data panel to search Space Track for satellites by OID.
+sub search_oid_panel {
+    my ( $widget, $data ) = @_;
+
+    search_generic_panel( $widget, $data,
+	search_oid => 'OID(s) to search for:', { status => 0 } );
+
+    return;
+
+}
+
+# Return the arguments for the search_oid method.
+sub search_oid_args {
+    goto &search_generic_args;
+}
+
+# Adjust the data panel to add widgets for the standard search
+# arguments.
+sub search_options_widgets {
+    my ( $widget, $source, $data, $dg, $opt ) = @_;
+
+    ref $opt eq 'HASH' or $opt = {};
+    defined $opt->{status} or $opt->{status} = 1;
+
+    if ( $data->{option}{status} = $opt->{status} ) {
+
+	$widget->{$source}{search_status_label} ||=
+	    $widget->{data_frame}->Label( -text => 'Desired status:' );
+	$widget->{$source}{search_status_value} ||=
+	    $widget->{data_frame}->Optionmenu(
+		-options => [
+		    [ 'All'		=> 'all' ],
+		    [ 'On orbit'	=> 'onorbit' ],
+		    [ 'Decayed'		=> 'decayed' ],
+		],
+		-variable => \$data->{$source}{search_status},
+	    );
+
+	$widget->{$source}{exclude_debris_label} ||=
+	$widget->{data_frame}->Label( -text => 'Exclude debris:' );
+	$widget->{$source}{exclude_debris_value} ||=
+	    $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{$source}{exclude_debris},
+	    );
+
+	$widget->{$source}{exclude_rocket_label} ||=
+	$widget->{data_frame}->Label( -text => 'Exclude rocket bodies:' );
+	$widget->{$source}{exclude_rocket_value} ||=
+	    $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{$source}{exclude_rocket},
+	    );
+
+    }
+
+    exists $data->{$source}{retrieve_tle}
+	or $data->{$source}{retrieve_tle} = 1;
+    $widget->{$source}{retrieve_tle_label} ||=
+    $widget->{data_frame}->Label( -text => 'Retrieve TLEs:' );
+    $widget->{$source}{retrieve_tle_value} ||=
+    $widget->{data_frame}->Checkbutton(
+	-relief => 'flat',
+	-variable => \$data->{$source}{retrieve_tle},
+	-command => sub {
+	    retrieve_options_widgets_state( $widget, $source, $data );
+	    return;
+	},
+    );
+
+    $widget->{$source}{retrieve_rcs_label} ||=
+    $widget->{data_frame}->Label( -text => 'Retrieve radar cross section:' );
+    $widget->{$source}{retrieve_rcs_value} ||=
+    $widget->{data_frame}->Checkbutton(
+	-relief => 'flat',
+	-variable => \$data->{$source}{retrieve_rcs},
+    );
+
+    if ( $data->{option}{status} ) {
+
+	grid_next_row( $dg );
+	$widget->{$source}{search_status_label}->grid(
+	    grid_args( $dg, sticky => 'e' ) );
+	$widget->{$source}{search_status_value}->grid(
+	    grid_args( $dg, sticky => 'w' ) )->raise();
+
+	grid_next_row( $dg );
+	$widget->{$source}{exclude_debris_label}->grid(
+	    grid_args( $dg, sticky => 'e' ) );
+	$widget->{$source}{exclude_debris_value}->grid(
+	    grid_args( $dg, sticky => 'w' ) )->raise();
+
+	grid_next_row( $dg );
+	$widget->{$source}{exclude_rocket_label}->grid(
+	    grid_args( $dg, sticky => 'e' ) );
+	$widget->{$source}{exclude_rocket_value}->grid(
+	    grid_args( $dg, sticky => 'w' ) )->raise();
+
+    }
+
+    grid_next_row( $dg );
+    $widget->{$source}{retrieve_tle_label}->grid(
+	grid_args( $dg, sticky => 'e' ) );
+    $widget->{$source}{retrieve_tle_value}->grid(
+	grid_args( $dg, sticky => 'w' ) )->raise();
+
+    grid_next_row( $dg );
+    $widget->{$source}{retrieve_rcs_label}->grid(
+	grid_args( $dg, sticky => 'e' ) );
+    $widget->{$source}{retrieve_rcs_value}->grid(
+	grid_args( $dg, sticky => 'w' ) )->raise();
+
+    retrieve_options_widgets( $widget, $source => $data, $dg );
+
+    return;
+}
+
+# Generate standard search method arguments corresponding to the widget
+# settings.
+sub search_options_args {
+    my ( $source, $data ) = @_;
+    my @rslt;
+
+    if ( $data->{option}{status} ) {
+
+	$data->{$source}{search_status}
+	    and push @rslt, '-status', $data->{$source}{search_status};
+	my @exclude = grep { $data->{$source}{"exclude_$_"} } qw{ debris
+	    rocket };
+	@exclude and push @rslt, '-exclude', join ',', @exclude;
+
+    }
+
+    if ( $data->{$source}{retrieve_tle} ) {
+	$data->{$source}{retrieve_rcs}
+	    and push @rslt, '-rcs';
+    } else {
+	push @rslt, '-notle';
+    }
+
+    return @rslt;
+}
+
+# Adjust the data panel to retrieve Human Space Flight data.
+sub spaceflight_panel {
+    my ( $widget, $data ) = @_;
+
+    if ( ! $widget->{spaceflight} ) {
+	$data->{spaceflight}{iss} = $data->{spaceflight}{shuttle} = 1;
+	$widget->{spaceflight} = {
+	    all_label => $widget->{data_frame}->Label(
+		-text => 'Retrieve all elements:' ),
+	    all_value => $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{spaceflight}{all},
+	    ),
+	    eff_label => $widget->{data_frame}->Label(
+		-text => 'Retrieve effective date:' ),
+	    eff_value => $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{spaceflight}{effective},
+	    ),
+	    iss_label => $widget->{data_frame}->Label(
+		-text => 'Retrieve International Space Station data:' ),
+	    iss_value => $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{spaceflight}{iss},
+	    ),
+	    sts_label => $widget->{data_frame}->Label(
+		-text => 'Retrieve Space Shuttle data:' ),
+	    sts_value => $widget->{data_frame}->Checkbutton(
+		-relief => 'flat',
+		-variable => \$data->{spaceflight}{shuttle},
+	    ),
+	};
+    }
+
+    my $dg = grid_new( 1 );
+    $widget->{spaceflight}{iss_label}
+	->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{spaceflight}{iss_value}
+	->grid( grid_args( $dg, sticky => 'w' ) )->raise();
+
+    grid_next_row( $dg );
+    $widget->{spaceflight}{sts_label}
+	->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{spaceflight}{sts_value}
+	->grid( grid_args( $dg, sticky => 'w' ) )->raise();
+
+    grid_next_row( $dg );
+    $widget->{spaceflight}{all_label}
+	->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{spaceflight}{all_value}
+	->grid( grid_args( $dg, sticky => 'w' ) )->raise();
+
+    grid_next_row( $dg );
+    $widget->{spaceflight}{eff_label}
+	->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{spaceflight}{eff_value}
+	->grid( grid_args( $dg, sticky => 'w' ) )->raise();
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
+}
+
+# Build the argument list for the spaceflight() method.
+sub spaceflight_args {
+    my ( $data ) = @_;
+    my @args;
+    $data->{spaceflight}{all} and push @args, '-all';
+    $data->{spaceflight}{effective} and push @args, '-effective';
+    $data->{spaceflight}{iss} and push @args, 'iss';
+    $data->{spaceflight}{shuttle} and push @args, 'shuttle';
+    return @args;
+}
+
+# Adjust the data panel to retrieve Space Track catalogs.
+sub spacetrack_panel {
+    my ( $widget, $data ) = @_;
+
+    $widget->{spacetrack} ||= {
+	label => $widget->{data_frame}->Label(
+	    -text => 'Catalog name:' ),
+	value => $widget->{data_frame}->Optionmenu(
+	    -options => ( $st->names( 'spacetrack' ) )[1],
+	    -variable => \$data->{spacetrack},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{spacetrack}{label}->grid(
+	grid_args( $dg, sticky => 'e' ) );
+    $widget->{spacetrack}{value}->grid(
+	grid_args( $dg, sticky => 'w' ) )->raise();
+
+    include_common_names( $widget, $data, $dg );
+
+    return;
+}
+
+# Add to the data panel the widget to include common names in the data.
+{
+    sub include_common_names {
+	my ( $widget, $data, $grid ) = @_;
+
+	defined $data->{with_name}
+	    or $data->{with_name} = $st->getv( 'with_name' );
+
+	if ( $st->getv( 'direct' ) ) {
+	    if ( $widget->{common_names} ) {
+		$widget->{common_names}{label}->gridForget();
+		$widget->{common_names}{value}->gridForget();
+	    }
+	} else {
+	    grid_next_row( $grid );
+
+	    $widget->{common_names} ||= {
+		label => $widget->{data_frame}->Label(
+		    -text => 'Include common names:' ),
+		value => $widget->{data_frame}->Checkbutton(
+		    -variable => \$data->{with_name},
+		    -relief => 'flat',
+		    -command => sub {
+			$st->set( with_name => $data->{with_name} );
+			return;
+		    },
+		),
+	    };
+
+	    $widget->{common_names}{label}
+		->grid( grid_args( $grid, sticky => 'e' ) );
+	    $widget->{common_names}{value}
+		->grid( grid_args( $grid, sticky => 'w' ) )->raise();
+	}
+	return;
+    }
+}
+
+# Load the data frame for the selected data source.
+sub load_data_frame {
+    my ( $widget, $data ) = @_;
+
+    foreach my $kid ( $widget->{data_frame}->children() ) {
+	$kid->gridForget();
+    }
+
+    my $dg = grid_new();
+
+    $widget->{data_source_label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{data_source_widget}->grid( grid_args( $dg, sticky => 'w' )
+	)->raise();
+    $widget->{data_source_widget}->focus();
+
+    my $handler = __PACKAGE__->can( $data->{data_source} . '_panel' )
+	or return;
+    $handler->( $widget, $data );
+
+    foreach my $button ( @{ $widget->{main_buttons} } ) {
+	$button->raise();
+    }
+
+    return;
+}
+
+# Load the data source selector widget
+{
+
+    my @options;
+    BEGIN {
+	@options = (
+	    [
+		[ 'Celestrak catalog'	=> 'celestrak' ],
+		[ 'Human Space Flight data'	=> 'spaceflight' ],
+		[ 'Iridium Status'		=> 'iridium_status' ],
+		[ 'Local file catalog'		=> 'file' ],
+		[ 'Radio Amateur Satellite Corporation data' => 'amsat' ],
+		[ 'Space Track catalog'		=> 'spacetrack' ],
+		[ 'Space Track decay date search' => 'search_decay' ],
+		[ 'Space Track international designator search' =>
+		    'search_id' ],
+		[ 'Space Track launch date search' => 'search_date' ],
+		[ 'Space Track name search'	=> 'search_name' ],
+		[ 'Space Track OID search'	=> 'search_oid' ],
+		[ 'Space Track satellite box score' => 'box_score' ],
+		[ 'Space Track satellite OIDs'	=> 'retrieve' ],
+	    ],
+	    [
+		[ 'Celestrak catalog'	=> 'celestrak' ],
+		[ 'Human Space Flight data'	=> 'spaceflight' ],
+		[ 'Iridium Status'		=> 'iridium_status' ],
+		[ 'Radio Amateur Satellite Corporation data' => 'amsat' ],
+	    ],
+	);
+    }
+
+    sub load_data_source_widget {
+	my ( $widget ) = @_;
+	$widget->{data_source_widget}->options( $options[
+	    $st->getv( 'direct' ) ? 1 : 0 ] );
+	return;
+    }
+
+}
+
+# Retrieve the desired data.
+sub retrieve {
+    my ( $widget, $data ) = @_;
+    my $source = $data->{data_source};
+    my @args;
+    if ( my $handler = __PACKAGE__->can( $source . '_args' ) ) {
+	@args = $handler->( $data );
+    } elsif ( defined $data->{$source} ) {
+	@args = $data->{$source};
+    }
+#   warn "Debug - \$st->$source( ", join( ', ', map { "'$_'" } @args ), ' )';
+#   use YAML;
+#   warn "Debug - \$data is ", Dump( $data ), ' ';
+    my ( $error, $rslt );
+    if ( my $rslt = eval {
+	    local $SIG{__WARN__} = sub {
+		( my $msg = $_[0] ) =~
+		    s/ \S+ \s+ \S* SpaceTrackTk .* //smx;
+		$msg =~ s/ \s+ / /smxg;
+		$widget->{main_window}->messageBox( -icon => 'warning',
+		    -type => 'OK', -title => 'Data fetch warning',
+		    -message => $msg,
+		);
+	    };
+	    $st->$source( @args );
+	} ) {
+	$rslt->is_success()
+	    and return ( $rslt->content(), $source, @args );
+	$error = $rslt->status_line();
+    } else {
+	$error = $@ || 'An unknown error occurred';
+    }
+    $widget->{main_window}->messageBox( -icon => 'error', -type => 'OK',
+	-title => 'Data fetch error',
+	-message => $error,
+    );
+    return;
+}
+
+{
+
+    my %tabbed;
+
+    BEGIN {
+
+	%tabbed = (
+	    box_score => sub {
+		my ( $hash ) = @_;
+		if ( $hash->{row} == 0 && $hash->{column} > 0 &&
+		    $hash->{column} < 9 ) {
+		    return grid_args( $hash, columnspan => 4 );
+		} else {
+		    return grid_args( $hash );
+		}
+	    },
+	    search => \&grid_args,
+	);
+    }
+
+    sub view_window {
+	my ( $widget, $title, $content ) = @_;
+
+	my $vw = $widget->{main_window}->Toplevel(
+	    -title => $title,
+	    -borderwidth => 8,
+	);
+
+	if ( my $grid_args = $tabbed{ $st->content_type() } ) {
+
+	    my $vf = $vw->Scrolled(
+		Frame => -scrollbars => 'osoe',
+		-width => 600, -height => 400,
+	    )->pack( -expand => 1, -fill => 'both' );
+
+	    my $vg = {
+		row => 0, column => 0,
+		sticky => 'nsew',
+		ipadx => 2, ipady => 2,
+	    };
+
+	    my @lo = (
+		-relief => 'sunken',
+		-justify => 'left',
+		-wraplength => '20m',
+	    );
+
+	    my $special = 
+
+	    my $loc = 0;
+	    while ( $content =~ m/ ( \t | \r \n? | \n ) /smxg ) {
+		$vf->Label(
+		    -text => substr( $content, $loc, $-[0] - $loc ),
+		    @lo,
+		)->grid( $grid_args->( $vg ) );
+		$loc = $+[0];
+		"\t" eq $1 or grid_next_row( $vg );
+	    }
+
+	    $loc < length $content
+		and $vf->Label(
+		    -text => substr( $content, $loc ),
+		    @lo,
+		)->grid( $grid_args->( $vg ) );
+
+	} else {
+
+	    my $tx = $vw->Scrolled( 'Text',
+		-relief => 'sunken',
+		-scrollbars => 'oe',
+	    )->pack( -expand => 1, -fill => 'both' );
+	    $tx->insert( '0.0', $content );
+
+	}
+
+	return;
+    }
 }
 
 __END__
 
-=head1 NAME
+=head1 TITLE
 
-SpaceTrackTk - Perl/Tk application to fetch satellite orbit data.
+SpaceTrackTk - Tk-based interface to Astro::SpaceTrack
 
 =head1 SYNOPSIS
 
-This application provides a windowed interface to the Astro::SpaceTrack
-module, based on the Perl/Tk windowing system. All you do is issue the
-command
+ SpaceTrackTk
+ SpaceTrackTk username menuhin password yehudi with_name 1
+ SpaceTrackTk direct 1
 
- $ SpaceTrackTk
+=head1 OPTIONS
 
-You will be presented with a splash screen, followed by a login window.
-In order to get full functionality, you must have a Space Track
-account. It is the username and password of this account that you enter
-into the login screen.
+None
 
-You have the option to skip the login. This gives you reduced
-functionality, since you are limited to the data provided by
-redistributers known to Astro::SpaceTrack. The reduced functionality
-is apparent in two ways:
+=head1 DETAILS
 
-* The Space Track sources do not appear in the "Object ID source" drop
-list.
-
-* The "Include common names" checkbox does not appear on the retrieval
-window, since you get whatever the redistributer provides.
-
-=head1 ENVIRONMENT
-
-If SPACETRACK_OPT sets direct to 1, the login screen is skipped, and
-the functionality is as though you skipped the login (i.e. reduced).
-Otherwise, if a username and password are available from either
-SPACETRACK_USER or SPACETRACK_OPT, you are logged in automatically
-and the login screen is skipped.
-
-Please see L<Astro::SpaceTrack> for the details.
-
-=head1 MODIFICATIONS
-
- (no version) T. R. Wyant
-   initial release.
- 0.013 24-Nov-2005 T. R. Wyant
-   Added version.
-   Added support for direct-fetching of data.
-   Added ability to skip login.
-   Added POD.
- 0.014 22-Feb-2006 T. R. Wyant
-   Support iridium_status.
- 0.015 30-May-2006 T. R. Wyant
-   Support spaceflight and amsat.
- 0.016 13-Jul-2006 T. R. Wyant
-   Support search_date().
- 0.017 25-Jul-2006 T. R. Wyant
-   Support spaceflight -all, shuttle, iss.
-   Don't display data window when query fails.
- 0.018 - 08-Sep-2006 T. R. Wyant
-   Add settings window and help window.
-
-=head1 ACKNOWLEDGMENTS
-
-The author wishes to thank Dr. T. S. Kelso of
-L<http://celestrak.com/> and the staff of L<http://www.space-track.org/>
-(whose names are unfortunately unknown to me) for their co-operation,
-assistance and encouragement in the development of the Astro::SpaceTrack
-module.
+This script provides a L<Tk|Tk> front-end for
+L<Astro::SpaceTrack|Astro::SpaceTrack>. The command arguments are passed
+to the L<Astro::SpaceTrack|Astro::SpaceTrack> C<set()> method.
 
 =head1 AUTHOR
 
-Thomas R. Wyant, III (F<wyant at cpan dot org>)
+Thomas R. Wyant, III F<wyant at cpan dot org>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2005-2010 by Thomas R. Wyant, III
-(F<wyant at cpan dot org>).
+Copyright (C) 2010, Thomas R. Wyant, III
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
@@ -631,9 +1294,6 @@ of the licenses in the directory LICENSES.
 This program is distributed in the hope that it will be useful, but
 without any warranty; without even the implied warranty of
 merchantability or fitness for a particular purpose.
-
-The data obtained by this script may be subject to the Space
-Track user agreement (L<http://www.space-track.org/perl/user_agreement.pl>).
 
 =cut
 
