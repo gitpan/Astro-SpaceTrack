@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.048';
+our $VERSION = '0.049';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -2947,16 +2947,24 @@ my @legal_retrieve_args = (
 sub _parse_retrieve_args {
     my @args = @_;
     my $extra_args = ref $args[0] eq 'ARRAY' ? shift @args : undef;
-    ref $args[0] eq 'HASH' and return @args;
 
     my $opt;
-    ( $opt, @args ) = _parse_args(
-	( $extra_args ? [ @legal_retrieve_args, @{ $extra_args } ] :
-	    \@legal_retrieve_args ), @args );
+
+    if ( 'HASH' eq ref $args[0] ) {
+
+	$opt = { %{ shift @args } };	# Poor man's clone
+
+    } else {
+
+	( $opt, @args ) = _parse_args(
+	    ( $extra_args ? [ @legal_retrieve_args, @{ $extra_args } ] :
+		\@legal_retrieve_args ), @args );
+
+    }
 
     $opt->{sort} ||= 'catnum';
 
-    ($opt->{sort} eq 'catnum' || $opt->{sort} eq 'epoch') or die <<"EOD";
+    $opt->{sort} eq 'catnum' or $opt->{sort} eq 'epoch' or die <<"EOD";
 Error - Illegal sort '$opt->{sort}'. You must specify 'catnum'
         (the default) or 'epoch'.
 EOD
