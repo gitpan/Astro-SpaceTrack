@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.049';
+our $VERSION = '0.049_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -571,7 +571,7 @@ sub celestrak {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
+    @args = _parse_retrieve_args( @args );
     my $opt = shift @args;
 
     my $name = shift @args;
@@ -593,7 +593,7 @@ sub _celestrak_direct {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
+    @args = _parse_retrieve_args( @args );
     my $opt = shift @args;
     my $name = shift @args;
     my $resp = $self->{agent}->get (
@@ -777,7 +777,7 @@ You can specify the L</retrieve> options on this method as well.
 
 sub file {
     my ($self, @args) = @_;
-    @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
+    @args = _parse_retrieve_args( @args );
     my $opt = shift @args;
 
     delete $self->{_pragmata};
@@ -1456,8 +1456,7 @@ sub retrieve {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args (@args)
-	unless ref $args[0] eq 'HASH';
+    @args = _parse_retrieve_args( @args );
     my $opt = _parse_retrieve_dates (shift @args);
 
     my @params = $opt->{start_epoch} ?
@@ -1968,8 +1967,7 @@ containing the actual search results.
 
 sub search_oid {
     my ($self, @args) = @_;
-    ref $args[0] eq 'HASH'
-	or @args = _parse_retrieve_args(
+    @args = _parse_retrieve_args(
 	[
 	    'rcs!' => '(append --rcs radar_cross_section to name)',
 	    'tle!' => '(return TLE data from search (defaults true))'
@@ -2264,13 +2262,12 @@ sub spaceflight {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args (
+    @args = _parse_retrieve_args(
 	[
 	    'all!' => 'retrieve all data',
 	    'effective!' => 'include effective date',
 	],
-	@args)
-	unless ref $args[0] eq 'HASH';
+	@args );
     my $opt = _parse_retrieve_dates (shift @args, {perldate => 1});
 
     $opt->{all} = 0 if $opt->{last5} || $opt->{start_epoch};
@@ -2288,11 +2285,13 @@ sub spaceflight {
     }
 
     my $content = '';
+    my $html = '';
     my $now = time ();
     my %tle;
     foreach my $url (@list) {
 	my $resp = $self->{agent}->get ($url);
 	return $resp unless $resp->is_success;
+	$html .= $resp->content();
 	my (@data, $acquire, $effective);
 	foreach (split qr{ \n }smx, $resp->content) {
 	    chomp;
@@ -2355,8 +2354,9 @@ sub spaceflight {
 	sort {$a->[0] <=> $b->[0] || $a->[1] <=> $b->[1]}
 	map {@$_} values %tle;
 
-    $content or
-	return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_RECORDS);
+    $content
+	or return HTTP::Response->new( RC_PRECONDITION_FAILED,
+	    NO_RECORDS, undef, $html );
 
     my $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
     $self->_add_pragmata($resp,
@@ -2770,7 +2770,7 @@ sub _handle_observing_list {
     my ($self, @args) = @_;
     my (@catnum, @data);
 
-    @args = _parse_retrieve_args (@args) unless ref $args[0] eq 'HASH';
+    @args = _parse_retrieve_args( @args );
     my $opt = shift;
 
     foreach (map {split qr{ \n }smx, $_} @args) {
@@ -3039,7 +3039,8 @@ sub _parse_search_args {
     my @args = @_;
     unless (ref ($args[0]) eq 'HASH') {
 	ref $args[0] eq 'ARRAY' and my @extra = @{shift @args};
-	@args = _parse_retrieve_args ([@legal_search_args, @extra], @args);
+	@args = _parse_retrieve_args(
+	    [ @legal_search_args, @extra ], @args );
 
 	my $opt = $args[0];
 	$opt->{status} ||= 'all';
@@ -3105,8 +3106,7 @@ sub _search_generic {
     my ($self, $poster, @args) = @_;
     delete $self->{_pragmata};
 
-    ref $args[0] eq 'HASH'
-	or @args = _parse_retrieve_args (@args);
+    @args = _parse_retrieve_args( @args );
     my $opt = shift @args;
 
     @args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
