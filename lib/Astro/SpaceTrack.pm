@@ -90,7 +90,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.050';
+our $VERSION = '0.051';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -319,7 +319,6 @@ sub amsat {
     my $self = shift;
     delete $self->{_pragmata};
     my $content = '';
-    my $now = time ();
     foreach my $url (
 	'http://www.amsat.org/amsat/ftp/keps/current/nasabare.txt',
     ) {
@@ -392,7 +391,7 @@ Space Track (http://$self->{domain_space_track}/) you must register and
 get a username and password, and you may not make the data available to
 a third party without prior permission from Space Track.
 
-Copyright 2005-2010 T. R. Wyant (wyant at cpan dot org).
+Copyright 2005-2011 by T. R. Wyant (wyant at cpan dot org).
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
@@ -594,7 +593,8 @@ sub _celestrak_direct {
     delete $self->{_pragmata};
 
     @args = _parse_retrieve_args( @args );
-    my $opt = shift @args;
+##  my $opt = shift @args;
+    shift @args;	# $opt not used
     my $name = shift @args;
     my $resp = $self->{agent}->get (
 	"http://celestrak.com/NORAD/elements/$name.txt");
@@ -840,7 +840,7 @@ See L</Attributes> for the names and functions of the attributes.
 sub getv {
     my ( $self, $name ) = @_;
     defined $name
-	or croak 'No attribute name specified',
+	or croak 'No attribute name specified';
     $mutator{$name}
 	or croak "No such attribute as '$name'";
     return $self->{$name};
@@ -1007,13 +1007,18 @@ fill in the functioning satellites so that a complete list is generated.
 The comment will be whatever text is provided by Mike McCants' web page,
 or 'Celestrak' if the satellite data came from that source.
 
-As of 20-Feb-2006 Mike's web page documented the possible statuses as
+As of 03-Dec-2010 Mike's web page documented the possible statuses as
 follows:
 
- blank - object is operational
- 'tum' - tumbling
- '?' - not at operational altitude
- 'man' - maneuvering, at least slightly.
+ blank   Object is operational
+ tum     tumbling - no flares, but flashes seen on favorable
+         transits.
+ unc     uncontrolled
+ ?       controlled, but not at operational altitude -
+         flares may be unreliable.
+ man     maneuvering, at least slightly. Flares may be
+	 unreliable and the object may be early or late
+         against prediction.
 
 In addition, the data from Celestrak may contain the following
 status:
@@ -1666,8 +1671,9 @@ sub search_date {
 	    _sessionid => '',
 	    _submit => 'submit',
 	    _submitted => 1,
-	    );
-	}, @args );
+	);
+	return $resp;
+    }, @args );
 }
 
 
@@ -1742,6 +1748,7 @@ sub search_decay {
 		    _submit => 'Submit',
 		    _submitted => 1,
 		);
+		return $resp;
 	    },
 	}, @args);
 }
@@ -1820,8 +1827,9 @@ sub search_id {
 	    _sessionid => '',
 	    _submit => 'submit',
 	    _submitted => 1,
-	    );
-	}, @args);
+	);
+	return $resp;
+    }, @args);
 }
 
 
@@ -3466,7 +3474,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2005-2010 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
+Copyright 2005-2011 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 LICENSE
 

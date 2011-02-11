@@ -10,7 +10,7 @@ use IO::File;
 use Tk;
 use Tk::Pane;
 
-our $VERSION = '0.050';
+our $VERSION = '0.051';
 
 my @pad = qw{ -padx 5 -pady 5 };	# Standard cell padding
 
@@ -160,7 +160,6 @@ sub main_window {
     # Set up the data frame.
     my $df = $widget{data_frame} = $widget{main_window}->Frame->pack(
 	-side => 'top', @pad );
-    my $dg = grid_new();
 
     # Create the data source label and widget, but don't put them in the
     # data frame yet.
@@ -1152,7 +1151,7 @@ sub retrieve {
 #   warn "Debug - \$st->$source( ", join( ', ', map { "'$_'" } @args ), ' )';
 #   use YAML;
 #   warn "Debug - \$data is ", Dump( $data ), ' ';
-    my ( $error, $rslt );
+    my ( $error );
     if ( my $rslt = eval {
 	    local $SIG{__WARN__} = sub {
 		( my $msg = $_[0] ) =~
@@ -1225,8 +1224,6 @@ sub retrieve {
 		-wraplength => '20m',
 	    );
 
-	    my $special = 
-
 	    my $loc = 0;
 	    while ( $content =~ m/ ( \t | \r \n? | \n ) /smxg ) {
 		$vf->Label(
@@ -1285,7 +1282,7 @@ Thomas R. Wyant, III F<wyant at cpan dot org>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010, Thomas R. Wyant, III
+Copyright (C) 2010-2011 by Thomas R. Wyant, III
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
