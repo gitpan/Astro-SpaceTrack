@@ -53,11 +53,11 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.052"
+         "version" : "0.053"
       },
       "Astro::SpaceTrack::Parser" : {
          "file" : "lib/Astro/SpaceTrack/Parser.pm",
-         "version" : "0.052"
+         "version" : "0.053"
       }
    },
    "release_status" : "stable",
@@ -69,5 +69,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.052"
+   "version" : "0.053"
 }
