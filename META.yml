@@ -3,9 +3,9 @@ abstract: 'Download satellite orbital elements from Space Track'
 author:
   - 'Tom Wyant (wyant at cpan dot org)'
 build_requires:
-  Test::More: 0.4
+  Test::More: 0.88
 dynamic_config: 1
-generated_by: 'Module::Build version 0.38, CPAN::Meta::Converter version 2.110930001'
+generated_by: 'Module::Build version 0.38, CPAN::Meta::Converter version 2.112621'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -19,10 +19,10 @@ no_index:
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.054
+    version: 0.055
   Astro::SpaceTrack::Parser:
     file: lib/Astro/SpaceTrack/Parser.pm
-    version: 0.054
+    version: 0.055
 requires:
   Carp: 0
   Compress::Zlib: 0
@@ -46,4 +46,4 @@ requires:
 resources:
   bugtracker: https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack
   license: http://dev.perl.org/licenses/
-version: 0.054
+version: 0.055

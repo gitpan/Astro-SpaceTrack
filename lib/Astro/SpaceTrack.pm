@@ -110,7 +110,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.054';
+our $VERSION = '0.055';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -2814,12 +2814,12 @@ sub _get {
     sub _get_yaml_package {
 	$tried and return $package;
 	$tried++;
-	$package =
-	    eval { require YAML::XS;   'YAML::XS'   } ||
-	    eval { require YAML::Syck; 'YAML::Syck' } ||
-	    eval { require YAML;       'YAML'       } ||
-	    eval { require YAML::Tiny; 'YAML::Tiny' }
-	;
+	foreach my $try ( qw{ YAML::XS YAML::Syck YAML YAML::Tiny } ) {
+	    ( my $fn = $try ) =~ s{ :: }{/}smxg;
+	    $fn .= '.pm';
+	    eval { require $fn; 1 } or next;
+	    return ( $package = $try );
+	}
 	return $package;
     }
 }
