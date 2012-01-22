@@ -47,18 +47,17 @@ C<celestrak()> C<'sts'> catalog and the C<spaceflight()> C<'SHUTTLE'>
 argument, because of the end of the Space Shuttle program on July 21
 2011.
 
-With this release of the software, the C<spaceflight()> C<'SHUTTLE'>
-argument will unconditionally cause nothing to be retrieved.
-
-With the first release on or after January 21 2012, the first use of
+With this release of the software, the first use of
 either the C<celestrak()> C<'sts'> catalog or the C<spaceflight()>
 C<'SHUTTLE'> argument will generate a deprecation warning.
 
-Six months or more later, all uses of C<celestrak()> C<'sts'> or
-C<spaceflight()> C<'SHUTTLE'> will generate a deprecation warning.
+With the first release on or after July 22 2012, all uses of
+C<celestrak()> C<'sts'> or C<spaceflight()> C<'SHUTTLE'> will generate a
+deprecation warning.
 
 Six further months later, the deprecated functionality will be removed.
-This means you will get a C<404> error when you try to use it.
+This means (probably) you will get a C<404> error when you try to use
+it.
 
 =head1 DESCRIPTION
 
@@ -110,7 +109,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.056';
+our $VERSION = '0.057';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1514,15 +1513,7 @@ sub retrieve {
 	    my ($lo, $hi) = split '-', shift @args;
 	    $lo > 0 or defined $hi or next;
 	    defined $hi and do {
-		($lo, $hi) = ($hi, $lo) if $lo > $hi;
-		$lo or $lo = 1;	# 0 is illegal
-		$hi - $lo >= $self->{max_range} and do {
-		    carp <<"EOD";
-Warning - Range $lo-$hi ignored because it is greater than the
-	  currently-set maximum of $self->{max_range}.
-EOD
-		    next;
-		};
+		( $lo, $hi ) = $self->_check_range( $lo, $hi );
 		$ids += $hi - $lo;
 		$ids > RETRIEVAL_SIZE and do {
 		    my $mid = $hi - $ids + RETRIEVAL_SIZE;
@@ -2011,6 +2002,8 @@ sub search_oid {
 
 sub _search_oid_generic {
     my ( $self, $ids, $opt ) = @_;
+    $ids =~ s{ ( \d+ ) \s* - \s* ( \d+ ) }
+	{ scalar $self->_expand_range( $1, $2 ) }smxeg;
     return $self->_post (
 	'perl/satcat_id_query.pl',
 	_submitted => 1,
@@ -2019,6 +2012,27 @@ sub _search_oid_generic {
 	desc => ( $opt->{descending} ? 'yes' : '' ),
 	_submit => 'Submit',
     );
+}
+
+sub _check_range {
+    my ( $self, $lo, $hi ) = @_;
+    ($lo, $hi) = ($hi, $lo) if $lo > $hi;
+    $lo or $lo = 1;	# 0 is illegal
+    $hi - $lo >= $self->{max_range} and do {
+	carp <<"EOD";
+Warning - Range $lo-$hi ignored because it is greater than the
+	  currently-set maximum of $self->{max_range}.
+EOD
+	return;
+    };
+    return ( $lo, $hi );
+}
+
+sub _expand_range {
+    my ( $self, @args ) = @_;
+    my ( $lo, $hi ) = $self->_check_range( @args )
+	or return wantarray ? () : '';
+    return wantarray ? ( $lo .. $hi ) : join ' ', $lo .. $hi;
 }
 
 
@@ -2609,10 +2623,10 @@ EOD
 
     my %deprecate = (
 	celestrak => {
-	    sts	=> 0,
+	    sts	=> 1,
 	},
 	spaceflight => {
-	    shuttle	=> 0,
+	    shuttle	=> 1,
 	},
     );
 
@@ -2623,7 +2637,7 @@ EOD
 	$deprecate{$method}{$argument} >= 3
 	    and croak "$argument $method is retracted";
 	warnings::enabled( 'deprecated' )
-	    and carp "$argument $method is deprecated";
+	    and carp "Method $method( '$argument' ) is deprecated";
 	$deprecate{$method}{$argument} == 1
 	    and $deprecate{$method}{$argument} = 0;
 	return;
@@ -2810,11 +2824,13 @@ sub _get {
 #	the name of the first which is loaded successfully. If none can
 #	be loaded, it returns undef. Subsequent calls simply return
 #	whatever the first call did.
+#
+#	Well, at the moment all it tries is YAML::Any.
 
     sub _get_yaml_package {
 	$tried and return $package;
 	$tried++;
-	foreach my $try ( qw{ YAML::XS YAML::Syck YAML YAML::Tiny } ) {
+	foreach my $try ( qw{ YAML::Any } ) {
 	    ( my $fn = $try ) =~ s{ :: }{/}smxg;
 	    $fn .= '.pm';
 	    eval { require $fn; 1 } or next;
@@ -3547,7 +3563,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2005-2011 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
+Copyright 2005-2012 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 LICENSE
 
