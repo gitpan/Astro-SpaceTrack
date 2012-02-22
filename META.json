@@ -4,7 +4,7 @@
       "Tom Wyant (wyant at cpan dot org)"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "Module::Build version 0.38, CPAN::Meta::Converter version 2.113640",
+   "generated_by" : "Module::Build version 0.38, CPAN::Meta::Converter version 2.120351",
    "license" : [
       "perl_5"
    ],
@@ -28,36 +28,36 @@
       },
       "runtime" : {
          "requires" : {
-            "Carp" : 0,
-            "Compress::Zlib" : 0,
-            "Data::Dumper" : 0,
-            "Exporter" : 0,
-            "Getopt::Long" : 0,
-            "HTML::Parser" : 0,
-            "HTTP::Response" : 0,
-            "HTTP::Status" : 0,
-            "IO::File" : 0,
-            "LWP::Protocol::https" : 0,
-            "LWP::UserAgent" : 0,
-            "POSIX" : 0,
+            "Carp" : "0",
+            "Compress::Zlib" : "0",
+            "Data::Dumper" : "0",
+            "Exporter" : "0",
+            "Getopt::Long" : "0",
+            "HTML::Parser" : "0",
+            "HTTP::Response" : "0",
+            "HTTP::Status" : "0",
+            "IO::File" : "0",
+            "LWP::Protocol::https" : "0",
+            "LWP::UserAgent" : "0",
+            "POSIX" : "0",
             "Scalar::Util" : "1.07",
-            "Text::ParseWords" : 0,
-            "Time::Local" : 0,
-            "constant" : 0,
+            "Text::ParseWords" : "0",
+            "Time::Local" : "0",
+            "constant" : "0",
             "perl" : "5.006002",
-            "strict" : 0,
-            "warnings" : 0
+            "strict" : "0",
+            "warnings" : "0"
          }
       }
    },
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.057"
+         "version" : "0.058"
       },
       "Astro::SpaceTrack::Parser" : {
          "file" : "lib/Astro/SpaceTrack/Parser.pm",
-         "version" : "0.057"
+         "version" : "0.058"
       }
    },
    "release_status" : "stable",
@@ -69,5 +69,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.057"
+   "version" : "0.058"
 }
