@@ -109,7 +109,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.058';
+our $VERSION = '0.059';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -2825,12 +2825,12 @@ sub _get {
 #	be loaded, it returns undef. Subsequent calls simply return
 #	whatever the first call did.
 #
-#	Well, at the moment all it tries is YAML::Any.
+#	Well, at the moment all it tries is YAML.
 
     sub _get_yaml_package {
 	$tried and return $package;
 	$tried++;
-	foreach my $try ( qw{ YAML::Any } ) {
+	foreach my $try ( qw{ YAML } ) {
 	    ( my $fn = $try ) =~ s{ :: }{/}smxg;
 	    $fn .= '.pm';
 	    eval { require $fn; 1 } or next;
