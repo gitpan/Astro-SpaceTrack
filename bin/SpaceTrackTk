@@ -10,7 +10,7 @@ use IO::File;
 use Tk;
 use Tk::Pane;
 
-our $VERSION = '0.060';
+our $VERSION = '0.060_01';
 
 my @pad = qw{ -padx 5 -pady 5 };	# Standard cell padding
 
@@ -141,6 +141,11 @@ sub login {
 	    $mw->destroy();
 	    return;
 	} )->grid( grid_args( $bg ) );
+
+    my %data;
+    $bf->Button( -text => 'Settings ...',
+	-command => sub{ settings( { main_window => $mw }, \%data ); },
+    )->grid( grid_args( $bg ) );
 
     MainLoop();
 
@@ -279,7 +284,7 @@ sub main_window {
 	};
 
 	my %current = map { $_ => $st->getv( $_ ) } qw{ direct
-	    max_range password username verbose webcmd };
+	    max_range password username verbose verify_hostname webcmd };
 	my %old = %current;
 
 	$settings = $widget->{main_window}->Toplevel(
@@ -295,6 +300,7 @@ sub main_window {
 	    'General',
 	    [ max_range => 'Maximum range:' ],
 	    [ verbose => 'Verbose Errors:', 'Checkbutton' ],
+	    [ verify_hostname => 'Verify Host Name:', 'Checkbutton' ],
 	    [ webcmd => 'Web Command:' ],
 	) {
 	    if ( 'ARRAY' eq ref $_ ) {

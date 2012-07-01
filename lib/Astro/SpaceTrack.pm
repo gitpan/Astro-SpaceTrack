@@ -38,7 +38,8 @@ User Agreement specified in
 L<http://www.space-track.org/perl/user_agreement.pl>.
 
 You should consult the above link for the full text of the user
-agreement before using this software.
+agreement before using this software to retrieve content from the Space
+Track web site.
 
 =head1 DEPRECATION NOTICE
 
@@ -47,10 +48,6 @@ C<celestrak()> C<'sts'> catalog and the C<spaceflight()> C<'SHUTTLE'>
 argument, because of the end of the Space Shuttle program on July 21
 2011.
 
-With this release of the software, the first use of
-either the C<celestrak()> C<'sts'> catalog or the C<spaceflight()>
-C<'SHUTTLE'> argument will generate a deprecation warning.
-
 With the first release on or after July 22 2012, all uses of
 C<celestrak()> C<'sts'> or C<spaceflight()> C<'SHUTTLE'> will generate a
 deprecation warning.
@@ -58,6 +55,39 @@ deprecation warning.
 Six further months later, the deprecated functionality will be removed.
 This means (probably) you will get a C<404> error when you try to use
 it.
+
+=head1 SPACE TRACK REST API
+
+The Space Track web site is in the throes of implementing a new REST
+API, to replace the old screen-scraping API. This API is currently in
+beta. This module implements the REST API to the extent possible, but
+should not be used for production code at this point.
+
+This module will use either the old (version 1) API or the new (version
+2) API, depending on the value of the C<space_track_version> attribute,
+which can be either C<1> or C<2>, with C<1> being the default. It is
+anticipated that some time in the future the default of this attribute
+will become C<2>.
+
+Version 2 of the interface differs from version 1 in the following ways
+that are known to me at this time.  All are due to limitations in the
+functionality provided by version 2 of the interface, unless explicitly
+stated otherwise.
+
+=over
+
+=item The retrieve() method (which retrieves TLEs for given OIDs) is
+incapable of returning the common name of the body.
+
+=item The C<spacetrack()> method (which returns predefined packages of
+TLEs) is unsupported, and throws an exception.
+
+=item The C<-exclude> option to the C<search_*()> methods is not
+supported by version 2 of the interface. When version 2 is in use, this
+software filters the results of a search to simulate the functionality
+of version 1 of the interface.
+
+=back
 
 =head1 DESCRIPTION
 
@@ -109,7 +139,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060';
+our $VERSION = '0.060_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -121,10 +151,11 @@ use Astro::SpaceTrack::Parser;
 use Carp;
 use Compress::Zlib ();
 use Getopt::Long;
-use IO::File;
 use HTTP::Response;	# Not in the base, but comes with LWP.
 use HTTP::Status qw{RC_NOT_FOUND RC_OK RC_PRECONDITION_FAILED
 	RC_UNAUTHORIZED RC_INTERNAL_SERVER_ERROR};	# Not in the base, but comes with LWP.
+use IO::File;
+use JSON qw{};
 use LWP::UserAgent;	# Not in the base.
 use POSIX qw{strftime};
 use Scalar::Util 1.07 qw{ blessed };
@@ -143,7 +174,8 @@ use constant NO_OBJ_NAME => 'No object name specified.';
 use constant NO_RECORDS => 'No records found.';
 
 use constant SESSION_PATH => '/';
-use constant SESSION_KEY => 'spacetrack_session';
+
+use constant DEFAULT_SPACE_TRACK_VERSION => 1;
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -218,10 +250,10 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 my %mutator = (	# Mutators for the various attributes.
     addendum => \&_mutate_attrib,		# Addendum to banner text.
     banner => \&_mutate_attrib,
-    cookie_expires => \&_mutate_attrib,
+    cookie_expires => \&_mutate_spacetrack_interface,
     debug_url => \&_mutate_attrib,	# Force the URL. Undocumented and unsupported.
     direct => \&_mutate_attrib,
-    domain_space_track => \&_mutate_authen,
+    domain_space_track => \&_mutate_spacetrack_interface,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
     fallback => \&_mutate_attrib,
     filter => \&_mutate_attrib,
@@ -229,7 +261,8 @@ my %mutator = (	# Mutators for the various attributes.
     max_range => \&_mutate_number,
     password => \&_mutate_authen,
     scheme_space_track => \&_mutate_attrib,
-    session_cookie => \&_mutate_cookie,
+    session_cookie => \&_mutate_spacetrack_interface,
+    space_track_version => \&_mutate_space_track_version,
     url_iridium_status_kelso => \&_mutate_attrib,
     url_iridium_status_mccants => \&_mutate_attrib,
     url_iridium_status_sladen => \&_mutate_attrib,
@@ -239,6 +272,17 @@ my %mutator = (	# Mutators for the various attributes.
     webcmd => \&_mutate_attrib,
     with_name => \&_mutate_attrib,
 );
+
+my %accessor = (
+    cookie_expires	=> \&_access_spacetrack_interface,
+    domain_space_track	=> \&_access_spacetrack_interface,
+    session_cookie	=> \&_access_spacetrack_interface,
+);
+foreach my $key ( keys %mutator ) {
+    exists $accessor{$key}
+	or $accessor{$key} = sub { return $_[0]->{$_[1]} };
+}
+
 # Maybe I really want a cookie_file attribute, which is used to do
 # $self->{agent}->cookie_jar ({file => $self->{cookie_file}, autosave => 1}).
 # We'll want to use a false attribute value to pass an empty hash. Going to
@@ -266,10 +310,8 @@ sub new {
 
     my $self = {
 	banner => 1,	# shell () displays banner if true.
-	cookie_expires => 0,
 	debug_url => undef,	# Not turned on
 	direct => 0,	# Do not direct-fetch from redistributors
-	domain_space_track => 'www.space-track.org',
 	dump_headers => 0,	# No dumping.
 	fallback => 0,	# Do not fall back if primary source offline
 	filter => 0,	# Filter mode.
@@ -277,7 +319,22 @@ sub new {
 	max_range => 500,	# Sanity limit on range size.
 	password => undef,	# Login password.
 	scheme_space_track => 'https',
-	session_cookie => undef,
+	_space_track_interface	=> [
+	    undef,
+	    {	# Interface version 1
+		cookie_expires		=> 0,
+		cookie_name		=> 'spacetrack_session',
+		domain_space_track	=> 'www.space-track.org',
+		session_cookie		=> undef,
+	    },
+	    {	# Interface version 2
+##		cookie_expires		=> 0,
+		cookie_name		=> 'chocolatechip',
+		domain_space_track	=> 'beta.space-track.org',
+		session_cookie		=> undef,
+	    },
+	],
+	space_track_version	=> DEFAULT_SPACE_TRACK_VERSION,
 	url_iridium_status_kelso =>
 	    'http://celestrak.com/SpaceTrack/query/iridium.txt',
 	url_iridium_status_mccants =>
@@ -301,8 +358,6 @@ sub new {
     };
 
     @args and $self->set (@args);
-
-    $self->_check_cookie ();
 
     return $self;
 }
@@ -340,7 +395,7 @@ sub amsat {
     foreach my $url (
 	'http://www.amsat.org/amsat/ftp/keps/current/nasabare.txt',
     ) {
-	my $resp = $agent->get ($url);
+	my $resp = $agent->get( $url );
 	return $resp unless $resp->is_success;
 	$self->_dump_headers( $resp );
 	my @data;
@@ -397,6 +452,7 @@ benefit of the shell method.
 		'v' . $Config::Config{version};	## no critic (ProhibitPackageVars)
 	    }
 	};
+	my $url = $self->_make_space_track_base_url( 1 );
 	return HTTP::Response->new (RC_OK, undef, undef, <<"EOD");
 
 @{[__PACKAGE__]} version $VERSION
@@ -405,11 +461,11 @@ Perl $perl_version under $^O
 This package acquires satellite orbital elements and other data from a
 variety of web sites. It is your responsibility to abide by the terms of
 use of the individual web sites. In particular, to acquire data from
-Space Track ($self->{scheme_space_track}://$self->{domain_space_track}/) you must register and
+Space Track ($url/) you must register and
 get a username and password, and you may not make the data available to
 a third party without prior permission from Space Track.
 
-Copyright 2005-2011 by T. R. Wyant (wyant at cpan dot org).
+Copyright 2005-2012 by T. R. Wyant (wyant at cpan dot org).
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
@@ -434,8 +490,8 @@ score data, including headings and totals, with the fields
 tab-delimited.
 
 This method requires a Space Track username and password. It implicitly
-calls the login () method if the session cookie is missing or expired.
-If login () fails, you will get the HTTP::Response from login ().
+calls the C<login()> method if the session cookie is missing or expired.
+If C<login()> fails, you will get the HTTP::Response from C<login()>.
 
 If this method succeeds, the response will contain headers
 
@@ -446,7 +502,15 @@ There are no options or arguments.
 
 =cut
 
-sub box_score {
+{
+    my @dispatch = ( undef, \&_box_score_v1, \&_box_score_v2 );
+
+    sub box_score {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _box_score_v1 {
     my ( $self ) = @_;
 
     my $p = Astro::SpaceTrack::Parser->new ();
@@ -477,10 +541,71 @@ sub box_score {
     $self->_add_pragmata($resp,
 	'spacetrack-type' => 'box_score',
 	'spacetrack-source' => 'spacetrack',
+	'spacetrack-interface' => 1,
     );
     return wantarray ? ($resp, \@data) : $resp;
 }
 
+{
+
+    my @fields = qw{ SPADOC_CD
+	ORBITAL_PAYLOAD_COUNT ORBITAL_ROCKET_BODY_COUNT
+	    ORBITAL_DEBRIS_COUNT ORBITAL_TOTAL_COUNT
+	DECAYED_PAYLOAD_COUNT DECAYED_ROCKET_BODY_COUNT
+	    DECAYED_DEBRIS_COUNT DECAYED_TOTAL_COUNT
+	COUNTRY_TOTAL
+	};
+
+    my @head = (
+	[ '', 'Objects in Orbit', 'Decayed Objects' ],
+	[ 'Country/Organization',
+	    'Payload', 'Rocket Body', 'Debris', 'Total',
+	    'Payload', 'Rocket Body', 'Debris', 'Total',
+	    'Grand Total',
+	],
+    );
+
+    sub _box_score_v2 {
+	my ( $self ) = @_;
+
+	my $resp = $self->_get_rest( qw{ basicspacedata query class boxscore
+	    format json predicates all } );
+	$resp->is_success()
+	    and not $self->{debug_url}
+	    or return $resp;
+
+	my $data = JSON::decode_json( $resp->content() );
+
+	my $content;
+	foreach my $row ( @head ) {
+	    $content .= join( "\t", @{ $row } ) . "\n";
+	}
+	foreach my $datum ( @{ $data } ) {
+	    $datum->{SPADOC_CD} eq 'ALL'
+		and $datum->{SPADOC_CD} = 'Total';
+	    $content .= join( "\t", map { $datum->{$_} } @fields ) . "\n";
+	}
+
+	$resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'box_score',
+	    'spacetrack-source' => 'spacetrack',
+	    'spacetrack-interface' => 2,
+	);
+
+	wantarray
+	    or return $resp;
+
+	my @table;
+	foreach my $row ( @head ) {
+	    push @table, [ @{ $row } ];
+	}
+	foreach my $datum ( @{ $data } ) {
+	    push @table, [ map { $datum->{$_} } @fields ];
+	}
+	return ( $resp, \@table );
+    }
+}
 
 =for html <a name="celestrak"></a>
 
@@ -497,10 +622,10 @@ other orbiting body and the common name of the body.
 If the C<direct> attribute is true, or if the C<fallback> attribute is
 true and the data are not available from Space Track, the elements will
 be fetched directly from Celestrak, and no login is needed. Otherwise,
-this method implicitly calls the login () method if the session cookie
+this method implicitly calls the C<login()> method if the session cookie
 is missing or expired, and returns the SpaceTrack data for the OIDs
-fetched from Celestrak. If login () fails, you will get the
-HTTP::Response from login ().
+fetched from Celestrak. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 A list of valid names and brief descriptions can be obtained by calling
 C<< $st->names ('celestrak') >>. If you have set the C<verbose> attribute true
@@ -759,6 +884,34 @@ sub content_type {
     return;
 }
 
+=item $type = $st->content_interface( $resp );
+
+This method takes the given HTTP::Response object and returns the Space
+Track interface version specified by the
+C<'Pragma: spacetrack-interface ='> header. The following values are
+supported:
+
+ 1: The content was obtained using the version 1 interface.
+ 2: The content was obtained using the version 2 interface.
+ undef: The content did not come from Space Track.
+
+If the response object is not provided, it returns the data type
+from the last method call that returned an HTTP::Response object.
+
+If the response object B<is> provided, you can call this as a static
+method (i.e. as Astro::SpaceTrack->content_type($response)).
+
+=cut
+
+sub content_interface {
+    my ($self, $resp) = @_;
+    defined $resp or return $self->{_pragmata}{'spacetrack-interface'};
+    foreach ($resp->header ('Pragma')) {
+	m/ spacetrack-interface \s+ = \s+ (.+) /smxi and return $1;
+    }
+    return;
+}
+
 
 =for html <a name="file"></a>
 
@@ -774,8 +927,8 @@ references contains the catalog ID of a satellite or other orbiting body
 and the common name of the body.
 
 This method requires a Space Track username and password. It implicitly
-calls the login () method if the session cookie is missing or expired.
-If login () fails, you will get the HTTP::Response from login ().
+calls the C<login()> method if the session cookie is missing or expired.
+If C<login()> fails, you will get the HTTP::Response from C<login()>.
 
 The observing list file is (how convenient!) in the Celestrak format,
 with the first five characters of each line containing the object ID,
@@ -860,9 +1013,9 @@ sub getv {
     my ( $self, $name ) = @_;
     defined $name
 	or croak 'No attribute name specified';
-    $mutator{$name}
+    my $code = $accessor{$name}
 	or croak "No such attribute as '$name'";
-    return $self->{$name};
+    return $code->( $self, $name );
 }
 
 
@@ -1323,7 +1476,15 @@ A Space Track username and password are required to use this method.
 
 =cut
 
-sub login {
+{
+    my @dispatch = ( undef, \&_login_v1, \&_login_v2 );
+
+    sub login {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _login_v1 {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
     @args and $self->set (@args);
@@ -1336,8 +1497,9 @@ EOD
 
     #	Do not use the _post method to retrieve the session cookie,
     #	unless you like bottomless recursions.
+    my $url = $self->_make_space_track_base_url( 1 );
     my $resp = $self->_get_agent()->post (
-	"$self->{scheme_space_track}://$self->{domain_space_track}/perl/login.pl", [
+	"$url/perl/login.pl", [
 	    username => $self->{username},
 	    password => $self->{password},
 	    _submitted => 1,
@@ -1347,7 +1509,7 @@ EOD
     $resp->is_success or return $resp;
     $self->_dump_headers( $resp );
 
-    $self->_check_cookie () > time ()
+    $self->_record_cookie_generic( 1 )
 	or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
 
     $self->{dump_headers} and warn <<'EOD';
@@ -1356,6 +1518,61 @@ EOD
     return HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
 }
 
+sub _login_v2 {
+    my ( $self, @args ) = @_;
+    delete $self->{_pragmata};
+    @args and $self->set( @args );
+    ( $self->{username} && $self->{password} ) or
+	return HTTP::Response->new (
+	    RC_PRECONDITION_FAILED, NO_CREDENTIALS);
+    $self->{dump_headers} and warn <<"EOD";
+Logging in as $self->{username}.
+EOD
+
+    #	Do not use the _get_rest method to retrieve the session cookie,
+    #	unless you like bottomless recursions.
+    my $url = $self->_make_space_track_base_url( 2 );
+    my $resp = $self->_get_agent()->post(
+	"$url/ajaxauth/login", [
+	    identity => $self->{username},
+	    password => $self->{password},
+	] );
+
+    $resp->is_success or return $resp;
+    $self->_dump_headers( $resp );
+
+    $self->_record_cookie_generic( 2 )
+	or return HTTP::Response->new (RC_UNAUTHORIZED, LOGIN_FAILED);
+
+    $self->{dump_headers} and warn <<'EOD';
+Login successful.
+EOD
+    return HTTP::Response->new (RC_OK, undef, undef, "Login successful.\n");
+}
+
+=for html <a name="logout"></a>
+
+=item $st->logout()
+
+This method deletes all session cookies. It returns an HTTP::Response
+object that indicates success.
+
+=cut
+
+sub logout {
+    my ( $self ) = @_;
+    foreach my $spacetrack_interface_info (
+	@{ $self->{_space_track_interface} } ) {
+	$spacetrack_interface_info
+	    or next;
+	exists $spacetrack_interface_info->{session_cookie}
+	    and $spacetrack_interface_info->{session_cookie} = undef;
+	exists $spacetrack_interface_info->{cookie_expires}
+	    and $spacetrack_interface_info->{cookie_expires} = 0;
+    }
+    return HTTP::Response->new(
+	RC_OK, undef, undef, "Logout successful.\n" );
+}
 
 =for html <a name="names"></a>
 
@@ -1464,9 +1681,9 @@ more than one retrieval if necessary. To limit the damage done by a
 pernicious range, ranges greater than the max_range setting (which
 defaults to 500) will be ignored with a warning to STDERR.
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
 added to the HTTP::Response object returned.
@@ -1475,7 +1692,15 @@ added to the HTTP::Response object returned.
 
 use constant RETRIEVAL_SIZE => 50;
 
-sub retrieve {
+{
+    my @dispatch = ( undef, \&_retrieve_v1, \&_retrieve_v2 );
+
+    sub retrieve {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _retrieve_v1 {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
@@ -1548,10 +1773,423 @@ sub retrieve {
     $self->_add_pragmata($resp,
 	'spacetrack-type' => 'orbit',
 	'spacetrack-source' => 'spacetrack',
+	'spacetrack-interface' => 1,
     );
     return $resp;
 }
 
+sub _retrieve_v2 {
+    my ( $self, @args ) = @_;
+    delete $self->{_pragmata};
+    # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
+    @args = _parse_retrieve_args( @args );
+    my $opt = _parse_retrieve_dates( shift @args );
+
+    $opt = $self->_convert_retrieve_options_to_rest( $opt );
+
+    # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
+
+    @args
+	or return HTTP::Response->new( RC_PRECONDITION_FAILED, NO_CAT_ID );
+
+    my $content = '';
+    local $_ = undef;
+    my $resp;
+    foreach my $oid ( @args ) {
+	$resp = $self->_get_rest( basicspacedata => 'query',
+	    class		=> 'tle',
+	    NORAD_CAT_ID	=> $oid,
+	    format		=> 'tle',
+	    %{ $opt },
+	);
+	$resp->is_success()
+	    or return $resp;
+	$_ = $resp->content;
+	next if m/ function [.] key-exists /smxi;
+	$content .= $_;
+    }
+    $content
+	or return HTTP::Response->new ( RC_NOT_FOUND, NO_RECORDS );
+    $resp->content( $content );
+    $self->_convert_content( $resp );
+    $self->_add_pragmata( $resp,
+	'spacetrack-type' => 'orbit',
+	'spacetrack-source' => 'spacetrack',
+	'spacetrack-interface' => 2,
+    );
+    return $resp;
+}
+
+{
+
+    my %rest_sort_map = (
+	catnum	=> 'NORAD_CAT_ID',
+	epoch	=> 'EPOCH',
+    );
+
+    sub _convert_retrieve_options_to_rest {
+	my ( $self, $opt ) = @_;
+	my %rest;
+
+
+=begin comment
+
+    my $opt = _parse_retrieve_dates( shift @args );
+
+    my @params = $opt->{start_epoch} ?
+	(timeframe => 'timespan',
+	    start_year => $opt->{start_epoch}[5] + 1900,
+	    start_month => $opt->{start_epoch}[4] + 1,
+	    start_day => $opt->{start_epoch}[3],
+	    end_year => $opt->{end_epoch}[5] + 1900,
+	    end_month => $opt->{end_epoch}[4] + 1,
+	    end_day => $opt->{end_epoch}[3],
+	) :
+	$opt->{last5} ? (timeframe => 'last5') : (timeframe => 'latest');
+
+    push @params, common_name => $self->{with_name} ? 'yes' : '';
+    push @params, sort => $opt->{sort};
+    push @params, descending => $opt->{descending} ? 'yes' : '';
+
+=end comment
+
+=cut
+
+	if ( $opt->{start_epoch} || $opt->{end_epoch} ) {
+	    # TODO retrieval by epoch
+	    croak 'Selection by epoch not yet supported';
+	} else {
+	    $rest{limit} = $opt->{last5} ? 5 : 1;
+	}
+
+	$rest{orderby} = ( $rest_sort_map{$opt->{sort} || 'catnum'} ||
+	    'NORAD_CAT_ID' )
+	.  ( $opt->{descending} ? '%20desc' : '%20asc' );
+
+	foreach my $name ( qw{ class format } ) {
+	    defined $opt->{$name}
+		and $rest{$name} = $opt->{$name};
+	}
+
+	return \%rest;
+    }
+
+}
+
+{
+
+    my %status_query = (
+	onorbit	=> 'null-val',
+	decayed	=> '<>null-val',
+	all	=> '',
+    );
+
+    # TODO correctly implement exclusion. Not sure this works.
+    my %exclude_query = (
+	rocket	=> '<>r/b,<>akm,<>pkm',
+	debris	=> '<>deb,<>debris,<>coolant,<>shroud,<>westford needles',
+    );
+
+    sub _convert_search_options_to_rest {
+	my ( $self, $opt ) = @_;
+	my %rest;
+
+	if ( defined $opt->{status} ) {
+	    defined ( my $query = $status_query{$opt->{status}} )
+		or croak "Unknown status '$opt->{status}'";
+	    $query
+		and $rest{DECAY} = $query;
+	}
+
+	# TODO this may not be right at all, because this may not be the
+	# way selection works.
+
+=begin comment
+
+	if ( defined $opt->{exclude} ) {
+	    my @aggregate;
+	    foreach my $exclude ( @{ $opt->{exclude} } ) {
+		defined ( my $query = $exclude_query{$exclude} )
+		    or croak "Unknown exclusion '$exclude'";
+		push @aggregate, $query;
+	    }
+	    @aggregate
+		and croak 'REST interface does not support -exclude';
+	    @aggregate
+		and $rest{SATNAME} = join ',', @aggregate;
+	}
+
+=end comment
+
+=cut
+
+##	'status=s' => q{('onorbit', 'decayed', or 'all')},
+##	'exclude=s@' => q{('debris', 'rocket', or 'debris,rocket')},
+
+	return \%rest;
+    }
+}
+
+{
+
+    my %headings = (
+	NORAD_CAT_ID	=> 'Catalog Number',
+	SATNAME		=> 'Common Name',
+	INTLDES		=> 'International Designator',
+	COUNTRY		=> 'Country',
+	LAUNCH		=> 'Launch Date',
+	SITE		=> 'Launch Site',
+	DECAY		=> 'Decay Date',
+	PERIOD		=> 'Period',
+	APOGEE		=> 'Apogee',
+	PERIGEE		=> 'Perigee',
+	RCSVALUE	=> 'RCS',
+    );
+    my @heading_order = qw{
+	NORAD_CAT_ID SATNAME INTLDES COUNTRY LAUNCH SITE DECAY PERIOD
+	APOGEE PERIGEE RCSVALUE
+    };
+
+    sub _search_rest {
+	my ( $self, @args ) = @_;
+	delete $self->{_pragmata};
+
+	@args = _parse_search_args( @args );
+	delete $self->{_pragmata};
+
+	@args = _parse_retrieve_args( @args );
+	my $opt = shift @args;
+
+	my $want_tle = exists $opt->{tle} ? $opt->{tle} : 1;
+
+	my $rest_args = $self->_convert_search_options_to_rest( $opt );
+
+	my @search_list = ref $args[-1] eq 'ARRAY' ? @{ pop @args } : (
+	    pop @args );
+
+	my @found;
+
+	foreach my $search_for ( @search_list ) {
+
+	    my $rslt = $self->__search_rest_raw( %{ $rest_args }, @args,
+		$search_for );
+
+	    $rslt->is_success()
+		or return $rslt;
+
+	    my $data = JSON::decode_json( $rslt->content() );
+
+	    $self->_simulate_rest_exclude( $opt, $data );
+
+	    push @found , @{ $data };
+
+	}
+
+	my $rslt;
+
+	if ( $want_tle ) {
+
+	    my $with_name = $self->{with_name};
+
+	    $opt->{format} = 'json';
+	    $rest_args = $self->_convert_retrieve_options_to_rest( $opt );
+
+	    my $content;
+	    foreach my $datum ( @found ) {
+		$rslt = $self->_retrieve_v2( $opt,
+		    $datum->{NORAD_CAT_ID} );
+		$rslt->is_success()
+		    or return $rslt;
+		my $bodies = JSON::decode_json( $rslt->content() );
+		foreach my $body ( @{ $bodies } ) {
+		    my @line_0;
+		    $with_name
+			and push @line_0, $datum->{SATNAME};
+		    $opt->{rcs}
+			and push @line_0, "--rcs $datum->{RCSVALUE}";
+		    @line_0
+			and $content .= join( ' ', @line_0 ) . "\n";
+		    $content .= <<"EOD";
+$body->{TLE_LINE1}
+$body->{TLE_LINE2}
+EOD
+		}
+	    }
+
+	    $rslt = HTTP::Response->new( RC_OK, undef, undef, $content );
+	    $self->_add_pragmata( $rslt,
+		'spacetrack-type' => 'orbit',
+		'spacetrack-source' => 'spacetrack',
+		'spacetrack-interface' => 2,
+	    );
+
+	} else {
+
+	    my $content;
+	    foreach my $datum (
+		\%headings,
+		@found
+	    ) {
+		$content .= join( "\t",
+		    map { defined $datum->{$_} ? $datum->{$_} : '' }
+		    @heading_order
+		) . "\n";
+	    }
+	    $rslt = HTTP::Response->new( RC_OK, undef, undef, $content );
+	    $self->_add_pragmata( $rslt,
+		'spacetrack-type' => 'search',
+		'spacetrack-source' => 'spacetrack',
+		'spacetrack-interface' => 2,
+	    );
+
+	}
+
+	wantarray
+	    or return $rslt;
+
+	my @table;
+	foreach my $datum (
+	    \%headings,
+	    @found
+	) {
+	    push @table, [ map { $datum->{$_} } @heading_order ];
+	}
+
+	return ( $rslt, \@table );
+
+=begin comment
+
+	# Search arguments
+
+	'rcs!' => '(append --rcs radar_cross_section to name)',
+	'tle!' => '(return TLE data from search (defaults true))',
+	'status=s' => q{('onorbit', 'decayed', or 'all')},
+	'exclude=s@' => q{('debris', 'rocket', or 'debris,rocket')},
+
+	# Retrieve arguments
+
+	descending => '(direction of sort)',
+	'end_epoch=s' => 'date',
+	last5 => '(ignored if -start_epoch or -end_epoch specified)',
+	'sort=s' => "type ('catnum' or 'epoch', with 'catnum' the default)",
+	'start_epoch=s' => 'date',
+
+=end comment
+
+=cut
+
+	# Note - if we're doing the tab output, the names and order are:
+	# Catalog Number: NORAD_CAT_ID
+	# Common Name: SATNAME
+	# International Designator: INTLDES
+	# Country: COUNTRY
+	# Launch Date: LAUNCH (yyyy-mm-dd)
+	# Launch Site: SITE
+	# Decay Date: DECAY
+	# Period: PERIOD
+	# Incl.: INCLINATION
+	# Apogee: APOGEE
+	# Perigee: PERIGEE
+	# RCS: RCSVALUE
+
+=begin comment
+
+	exists $opt->{tle} or $opt->{tle} = 1;
+
+	@args or return HTTP::Response->new (RC_PRECONDITION_FAILED, NO_OBJ_NAME);
+
+	my %rest_args;
+
+
+	my %id;
+	my $resp;
+
+	$resp = $self->_search_generic_tabulate( \%id, $poster, $opt, @args )
+	    and return $resp;
+
+	if ( $opt->{tle} ) {
+	    my $with_name = $self->getv( 'with_name' );
+	    $resp = $self->retrieve ($opt, sort {$a <=> $b} keys %id);
+	    if ( $opt->{rcs} ) {
+		my $content = $resp->content();
+		my $replace = $with_name ? sub {
+		    my ( $newline, $oid ) = @_;
+		    return ( $id{$oid} && $id{$oid}[-1] ) ?
+			sprintf( " --rcs %s\n1%6d", $id{$oid}[-1], $oid ) :
+			sprintf( "\n1%6d", $oid );
+		} : sub {
+		    my ( $newline, $oid ) = @_;
+		    return ( $id{$oid} && $id{$oid}[-1] ) ?
+			sprintf( "%s--rcs %s\n1%6d", $newline,
+			    $id{$oid}[-1], $oid ) :
+			sprintf( "%s1%6d", $newline, $oid );
+		};
+		$content =~ s{ ( \A | \n ) 1 \s* ( \d+ ) }
+		    { $replace->( $1 || '', $2 ) }smxge;
+		$resp->content( $content );
+	    }
+	} else {
+	    my $content;
+	    foreach my $oid ( sort { $a <=> $b } keys %id ) {
+		$content .= join( "\t", @{ $id{$oid} } ) . "\n";
+	    }
+	    $resp = HTTP::Response->new (RC_OK, undef, undef, $content);
+	    $self->_add_pragmata($resp,
+		'spacetrack-type' => 'search',
+		'spacetrack-source' => 'spacetrack',
+	    );
+	}
+	wantarray or return $resp;
+	my @table;
+	foreach my $oid ( sort { $a <=> $b } keys %id ) {
+	    push @table, [
+		map { ( defined $_ && $_ ne '' ) ? $_ : undef }
+		@{ $id{$oid} } ];
+	}
+	return ($resp, \@table);
+
+=end comment
+
+=cut
+
+    }
+
+}
+
+sub __search_rest_raw {
+    my ( $self, %args ) = @_;
+    delete $self->{_pragmata};
+    # https://beta.space-track.org/basicspacedata/query/class/satcat/CURRENT/Y/NORAD_CAT_ID/25544/predicates/all/limit/10,0/metadata/true
+
+    %args
+	or return HTTP::Response->new( RC_PRECONDITION_FAILED, NO_CAT_ID );
+
+    exists $args{class}
+	or $args{class} = 'satcat';
+    exists $args{CURRENT}
+	or $args{CURRENT} = 'Y';
+    exists $args{format}
+	or $args{format} = 'json';
+    exists $args{predicates}
+	or $args{predicates} = 'all';
+    exists $args{orderby}
+	or $args{orderby} = 'NORAD_CAT_ID%20asc';
+#   exists $args{limit}
+#	or $args{limit} = 1000;
+
+    my $resp = $self->_get_rest(
+	basicspacedata	=> 'query',
+	%args,
+    );
+#   $resp->content( $content );
+#   $self->_convert_content( $resp );
+    $self->_add_pragmata( $resp,
+	'spacetrack-type' => 'orbit',
+	'spacetrack-source' => 'spacetrack',
+	'spacetrack-interface' => 2,
+    );
+    return $resp;
+}
 
 =for html <a name="search_date"></a>
 
@@ -1660,15 +2298,21 @@ containing the actual search results.
 
 =cut
 
-sub search_date {
+{
+    my @dispatch = ( undef, \&_search_date_v1, \&_search_date_v2 );
+
+    sub search_date {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _search_date_v1 {
     my ($self, @args) = @_;
     @args = _parse_search_args (@args);
     return $self->_search_generic (sub {
-	my ($self, $name, $opt) = @_;
-	my ($year, $month, $day) =
-	    $name =~ m/ \A (\d+) (?:\D+ (\d+) (?: \D+ (\d+) )? )? /smx
-		or return;
-	$year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
+	my ( $self, $name, $opt ) = @_;
+	my ( $year, $month, $day ) = _parse_launch_date( $name )
+	    or return;
 	$month ||= 0;
 	$day ||= 0;
 	my $resp = $self->_post ('perl/launch_query.pl',
@@ -1684,6 +2328,14 @@ sub search_date {
 	);
 	return $resp;
     }, @args );
+}
+
+sub _search_date_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
+    ( my $opt, @args ) = _parse_search_args( @args );
+    @_ = ( $self, $opt, LAUNCH => [
+	    map { _format_launch_date_rest( $_ ) } @args ] );
+    goto &_search_rest;
 }
 
 
@@ -1733,19 +2385,23 @@ containing the actual search results.
 
 =cut
 
-sub search_decay {
+{
+    my @dispatch = ( undef, \&_search_decay_v1, \&_search_decay_v2 );
+
+    sub search_decay {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _search_decay_v1 {
     my ($self, @args) = @_;
     @args = _parse_search_args (@args);
     return $self->_search_generic (
 	{
 	    splice => -1,
 	    poster => sub {
-		my ($self, $name, $opt) = @_;
-		my ($year, $month, $day) =
-		    $name =~ m{ \A (\d+) (?: \D+ (\d+) (?: \D+ (\d+) )?
-			)? }smx
-			or return;
-		$year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
+		my ( $self, $name, $opt ) = @_;
+		my ( $year, $month, $day ) = _parse_launch_date( $name );
 		$month ||= 0;
 		$day ||= 0;
 		my $resp = $self->_post ('perl/decay_query.pl',
@@ -1761,6 +2417,14 @@ sub search_decay {
 		return $resp;
 	    },
 	}, @args);
+}
+
+sub _search_decay_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
+    ( my $opt, @args ) = _parse_search_args( @args );
+    @_ = ( $self, $opt, DECAY => [
+	    map { _format_launch_date_rest( $_ ) } @args ] );
+    goto &_search_rest;
 }
 
 
@@ -1782,9 +2446,9 @@ The options are the same as for L</search_date>.
 
 A Space Track username and password are required to use this method.
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 What you get on success depends on the value specified for the C<-tle>
 option.
@@ -1818,15 +2482,20 @@ containing the actual search results.
  
 =cut
 
-sub search_id {
+{
+    my @dispatch = ( undef, \&_search_id_v1, \&_search_id_v2 );
+
+    sub search_id {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _search_id_v1 {
     my ($self, @args) = @_;
     @args = _parse_search_args (@args);
     return $self->_search_generic (sub {
-	my ($self, $name, $opt) = @_;
-	my ($year, $number, $piece) =
-	    $name =~ m/ \A (\d\d) (\d{3})? ( [[:alpha:]] )? \z /smx
-		or return;
-	$year += $year < 57 ? 2000 : 1900;
+	my ( $self, $name, $opt ) = @_;
+	my ( $year, $number, $piece ) = _parse_international_id( $name );
 	my $resp = $self->_post ('perl/launch_query.pl',
 	    date_spec => 'number',
 	    launch_year => $year,
@@ -1840,6 +2509,14 @@ sub search_id {
 	);
 	return $resp;
     }, @args);
+}
+
+sub _search_id_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
+    ( my $opt, @args ) = _parse_search_args( @args );
+    @_ = ( $self, $opt, INTLDES => [
+	    map { _format_international_id_rest( $_ ) } @args ] );
+    goto &_search_rest;
 }
 
 
@@ -1856,9 +2533,9 @@ option.
 
 A Space Track username and password are required to use this method.
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 What you get on success depends on the value specified for the -tle
 option.
@@ -1892,7 +2569,15 @@ containing the actual search results.
 
 =cut
 
-sub search_name {
+{
+    my @dispatch = ( undef, \&_search_name_v1, \&_search_name_v2 );
+
+    sub search_name {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _search_name_v1 {
     my ($self, @args) = @_;
     @args = _parse_search_args (@args);
     return $self->_search_generic (sub {
@@ -1908,6 +2593,14 @@ sub search_name {
 	    _submit => 'Submit',
 	    );
 	}, @args);
+}
+
+sub _search_name_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
+    ( my $opt, @args ) = _parse_search_args( @args );
+    @_ = ( $self, $opt, SATNAME => [
+	    map { "~~$_" } @args ] );
+    goto &_search_rest;
 }
 
 
@@ -1947,9 +2640,9 @@ C<-descending>.
 
 A Space Track username and password are required to use this method.
 
-This method implicitly calls the login () method if the session cookie
-is missing or expired. If login () fails, you will get the
-HTTP::Response from login ().
+This method implicitly calls the C<login()> method if the session cookie
+is missing or expired. If C<login()> fails, you will get the
+HTTP::Response from C<login()>.
 
 What you get on success depends on the value specified for the -tle
 option.
@@ -1983,7 +2676,15 @@ containing the actual search results.
 
 =cut
 
-sub search_oid {
+{
+    my @dispatch = ( undef, \&_search_oid_v1, \&_search_oid_v2 );
+
+    sub search_oid {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _search_oid_v1 {
     my ($self, @args) = @_;
     @args = _parse_retrieve_args(
 	[
@@ -1995,6 +2696,13 @@ sub search_oid {
     exists $opt->{tle} or $opt->{tle} = 1;
     my $ids = join ' ', @args;
     return $self->_search_generic ( \&_search_oid_generic, $opt, $ids );
+}
+
+sub _search_oid_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
+    ( my $opt, @args ) = _parse_search_args( @args );
+    @_ = ( $self, $opt, NORAD_CAT_ID => \@args );
+    goto &_search_rest;
 }
 
 sub _search_oid_generic {
@@ -2170,8 +2878,11 @@ EOD
 	    } or warn ( $@ || 'An unknown error occurred' );	## no critic (RequireCarping)
 	    next;
 	};
-	($verb eq 'new' || $verb =~ m/ \A _ /smx || $verb eq 'shell' ||
-	    !$self->can ($verb)) and do {
+
+	$verb ne 'new'
+	    and $verb ne 'shell'
+	    and $verb !~ m/ \A _ [^_] /smx
+	    or do {
 	    warn <<"EOD";
 Verb '$verb' undefined. Use 'help' to get help.
 EOD
@@ -2461,12 +3172,21 @@ This method implicitly calls the C<login()> method if the session cookie
 is missing or expired. If C<login()> fails, you will get the
 HTTP::Response from C<login()>.
 
+B<Version 2 of the Space Track interface does not support this method.>
+
 =cut
 
-sub spacetrack {
-    my $self = shift;
+{
+    my @dispatch = ( undef, \&_spacetrack_v1, \&_spacetrack_v2 );
+
+    sub spacetrack {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+
+}
+sub _spacetrack_v1 {
+    my ( $self, $catnum ) = @_;
     delete $self->{_pragmata};
-    my $catnum = shift;
     $catnum =~ m/ \D /smx and do {
 	my $info = $catalogs{spacetrack}{$catnum} or
 	    return $self->_no_such_catalog (spacetrack => $catnum);
@@ -2524,10 +3244,16 @@ Requested file  doesn't exist");history.go(-1);
 	    $self->_add_pragmata($resp,
 		'spacetrack-type' => 'orbit',
 		'spacetrack-source' => 'spacetrack',
+		'spacetrack-interface' => 1,
 	    );
 	}
     };
     return $resp;
+}
+
+sub _spacetrack_v2 {
+    # TODO figure out how to make this work.
+    croak 'Bulk data downloads not supported by REST API';
 }
 
 
@@ -2553,28 +3279,64 @@ sub _add_pragmata {
     return;
 }
 
-#	_check_cookie looks for our session cookie. If it's found, it returns
-#	the cookie's expiration time and sets the relevant attributes.
-#	Otherwise it returns zero.
+# _check_cookie_generic looks for our session cookie. If it is found, it
+# returns true if it thinks the cookie is valid, and false otherwise. If
+# it is not found, it returns false.
 
-sub _check_cookie {
-    my $self = shift;
-    my ($cookie, $expir);
-    $expir = 0;
-    $self->_get_agent()->cookie_jar->scan (sub {
-	$self->{dump_headers} > 1 and _dump_cookie ("_check_cookie:\n", @_);
-	($cookie, $expir) = @_[2, 8] if $_[4] eq $self->{domain_space_track} &&
-	    $_[3] eq SESSION_PATH && $_[1] eq SESSION_KEY;
-	});
-    $self->{dump_headers} and warn $expir ? <<"EOD" : <<'EOD';	## no critic (RequireCarping)
-Session cookie: $cookie
-Cookie expiration: @{[strftime '%d-%b-%Y %H:%M:%S', localtime $expir]} ($expir)
-EOD
-Session cookie not found
-EOD
-    $self->{session_cookie} = $cookie;
-    $self->{cookie_expires} = $expir;
-    return $expir || 0;
+sub _record_cookie_generic {
+    my ( $self, $version ) = @_;
+    defined $version
+	or $version = $self->{space_track_version};
+    my $interface_info = $self->{_space_track_interface}[$version];
+    my $cookie_name = $interface_info->{cookie_name};
+    my $domain = $interface_info->{domain_space_track};
+
+    my ( $cookie, $expires );
+    $self->_get_agent()->cookie_jar->scan( sub {
+	    $self->{dump_headers} > 1
+		and _dump_cookie( "_record_cookie_generic:\n", @_ );
+	    $_[4] eq $domain
+		or return;
+	    $_[3] eq SESSION_PATH
+		or return;
+	    $_[1] eq $cookie_name
+		or return;
+	    ( $cookie, $expires ) = @_[2, 8];
+	    return;
+	} );
+
+    if ( defined $cookie ) {
+	$interface_info->{session_cookie} = $cookie;
+	$self->{dump_headers}
+	    and warn "Session cookie: $cookie\n";	## no critic (RequireCarping)
+	if ( exists $interface_info->{cookie_expires} ) {
+	    $interface_info->{cookie_expires} = $expires;
+	    $self->{dump_headers}
+		and warn 'Cookie expiration: ',
+		    strftime( '%d-%b-%Y %H:%M:%S', localtime $expires ),
+		    " ($expires)\n";	## no critic (RequireCarping)
+	    return $expires > time;
+	}
+	return $interface_info->{session_cookie} ? 1 : 0;
+    } else {
+	$self->{dump_headers}
+	    and warn "Session cookie not found\n";	## no critic (RequireCarping)
+	return;
+    }
+}
+
+sub _check_cookie_generic {
+    my ( $self, $version ) = @_;
+    defined $version
+	or $version = $self->{space_track_version};
+    my $interface_info = $self->{_space_track_interface}[$version];
+
+    if ( exists $interface_info->{cookie_expires} ) {
+	return defined $interface_info->{cookie_expires}
+	    && $interface_info->{cookie_expires} > time;
+    } else {
+	return defined $interface_info->{session_cookie};
+    }
 }
 
 #	_convert_content converts the content of an HTTP::Response
@@ -2711,14 +3473,14 @@ sub _dump_headers {
 #	moral: don't try to dump requests unless YAML is installed.
 
 sub _dump_request {
-    my ($self, $url, @args) = @_;
+    my ( $self, $url, $args ) = @_;
     my $display = $self->{dump_headers} & 0x02;
     my $respond = ( $self->{debug_url} || '' ) =~ m/ \A dump-request: /smx;
     $display or $respond or return;
     my $dumper = _get_yaml_dumper() or return;
     (my $method = (caller 1)[3]) =~ s/ \A (?: .* :: )? _? //smx;
     my %data = (
-	args => {@args},
+	args => $args,
 	method => $method,
 	url => $url,
     );
@@ -2729,12 +3491,44 @@ sub _dump_request {
     return;
 }
 
+# Parse an international launch id, and format it for a Space-Track REST
+# query. The parsing is done by _parse_international_id(). The
+# formatting prefixes the 'contains' wildcard '~~' unless year, sequence
+# and part are all present.
+
+sub _format_international_id_rest {
+    my ( $intl_id ) = @_;
+    my @parts = _parse_international_id( $intl_id );
+    @parts >= 3
+	and return sprintf '%04d-%03d%s', @parts;
+    @parts >= 2
+	and return sprintf '~~%04d-%03d', @parts;
+    return sprintf '~~%04d', $parts[0];
+}
+
+# Parse a launch date, and format it for a Space-Track REST query. The
+# parsing is done by _parse_launch_date(). The formatting prefixes the
+# 'contains' wildcard '~~' unless year, month, and day are all present.
+
+sub _format_launch_date_rest {
+    my ( $date ) = @_;
+    my @parts = _parse_launch_date( $date )
+	or return;
+    @parts >= 3
+	and return sprintf '%04d-%02d-%02d', @parts;
+    @parts >= 2
+	and return sprintf '~~%04d-%02d', @parts;
+    return sprintf '~~%04d', $parts[0];
+}
+
 #	_get gets the given path on the domain. Arguments after the
 #	first are the CGI parameters. It checks the currency of the
 #	session cookie, and executes a login if it deems it necessary.
 #	The normal return is the HTTP::Response object from the get (),
 #	but if a login was attempted and failed, the HTTP::Response
 #	object from the login will be returned.
+#
+#	THIS IS TO BE USED ONLY FOR THE SPACETRACK V1 INTERFACE
 
 sub _get {
     my ($self, $path, @args) = @_;
@@ -2742,19 +3536,22 @@ sub _get {
     {
 	my @unpack = @args;
 	while (@unpack) {
-	    my $name = shift @unpack;
-	    my $val = shift @unpack || '';
+	    my ( $name, $val ) = splice @unpack, 0, 2;
+	    defined $val or $val = '';
 	    $cgi .= "&$name=$val";
 	}
     }
     $cgi and substr( $cgi, 0, 1, '?' );
     {	# Single-iteration loop
-	$self->{debug_url} or $self->{cookie_expires} > time () or do {
-	    my $resp = $self->login ();
+	$self->{debug_url}
+	    or $self->_check_cookie_generic( 1 )
+	    or do {
+	    my $resp = $self->_login_v1();
 	    return $resp unless $resp->is_success;
 	};
-	my $url = "$self->{scheme_space_track}://$self->{domain_space_track}/$path";
-	my $resp = $self->_dump_request($url, @args) ||
+	my $url = join '/', $self->_make_space_track_base_url( 1 ),
+	    $path;
+	my $resp = $self->_dump_request( $url, { @args } ) ||
 	    $self->_get_agent()->get (($self->{debug_url} || $url) . $cgi);
 	$self->_dump_headers( $resp );
 ##	return $resp unless $resp->is_success && !$self->{debug_url};
@@ -2763,7 +3560,7 @@ sub _get {
 	    or return $resp;
 	local $_ = $resp->content;
 	m/ login [.] pl /smxi and do {
-	    $self->{cookie_expires} = 0;
+	    $self->logout() = 0;
 	    redo;
 	};
 	return $resp;
@@ -2803,6 +3600,48 @@ sub _get_agent {
 	or $agent->cookie_jar( {} );
 
     return $agent;
+}
+
+# _get_rest() gets the given path on the domain. Arguments after the
+# first are the CGI parameters. It checks the currency of the session
+# cookie, and executes a login if it deems it necessary.  The normal
+# return is the HTTP::Response object from the get (), but if a login
+# was attempted and failed, the HTTP::Response object from the login
+# will be returned.
+#
+# THIS IS TO BE USED ONLY FOR THE SPACETRACK V2 INTERFACE
+
+sub _get_rest {
+    my ( $self, $path, @args ) = @_;
+    my $cgi = join '/', @args;
+
+    $self->{debug_url}
+	or $self->_check_cookie_generic( 2 )
+	or do {
+	my $resp = $self->_login_v2();
+	$resp->is_success()
+	    or return $resp;
+    };
+    my $url = join '/', $self->_make_space_track_base_url( 2 ),
+	$path;
+##  warn "Debug - $url/$cgi";
+    my $resp = $self->_dump_request( $url, \@args ) ||
+	$self->_get_agent()->get( ( $self->{debug_url} || $url ) .
+	    "/$cgi" );
+    $self->_dump_headers( $resp );
+    return $resp;
+}
+
+# _get_space_track_domain() returns the domain name portion of the Space
+# Track URL from the appropriate attribute. The argument is the
+# interface version number, which defaults to the value of the
+# space_track_version attribute.
+
+sub _get_space_track_domain {
+    my ( $self, $version ) = @_;
+    defined $version
+	or $version = $self->{space_track_version};
+    return $self->{_space_track_interface}[$version]{domain_space_track};
 }
 	
 {
@@ -2870,7 +3709,7 @@ sub _handle_observing_list {
     my (@catnum, @data);
 
     @args = _parse_retrieve_args( @args );
-    my $opt = shift;
+    my $opt = shift @args;
 
     foreach (map {split qr{ \n }smx, $_} @args) {
 	s/ \s+ \z //smx;
@@ -2879,9 +3718,9 @@ sub _handle_observing_list {
 	push @catnum, $id;
 	push @data, [$id, substr $_, 5];
     }
-    my $resp = $self->retrieve ($opt, sort {$a <=> $b} @catnum);
-    if ($resp->is_success) {
-	unless ($self->{_pragmata}) {
+    my $resp = $self->retrieve( $opt, sort {$a <=> $b} @catnum );
+    if ( $resp->is_success ) {
+	unless ( $self->{_pragmata} ) {
 	    $self->_add_pragmata($resp,
 		'spacetrack-type' => 'orbit',
 		'spacetrack-source' => 'spacetrack',
@@ -2902,6 +3741,16 @@ sub _instance {
     return $object->isa( $class );
 }
 
+# _make_space_track_base_url() makes the a base Space Track URL. You can
+# pass the interface version number (1 or 2) as an argument -- it
+# defaults to the value of the space_track_version attribute.
+
+sub _make_space_track_base_url {
+    my ( $self, $version ) = @_;
+    return $self->{scheme_space_track} . '://' .
+	$self->_get_space_track_domain( $version );
+}
+
 #	_mutate_attrib takes the name of an attribute and the new value
 #	for the attribute, and does what its name says.
 
@@ -2911,36 +3760,46 @@ sub _mutate_attrib {
     return ($_[0]{$_[1]} = $_[2]);
 }
 
+# TODO - for this to work, I need to be able to clear the cookie on
+# setting the domain. I think I need a logout() method.
+
+{
+    my %need_logout = map { $_ => 1 } qw{ domain_space_track };
+
+    sub _mutate_spacetrack_interface {
+	my ( $self, $name, $value ) = @_;
+	my $version = $self->{space_track_version};
+
+	my $spacetrack_interface_info =
+	    $self->{_space_track_interface}[$version];
+
+	exists $spacetrack_interface_info->{$name}
+	    or croak "Can not set $name for interface version $version";
+
+	$need_logout{$name}
+	    and $self->logout();
+
+	return ( $spacetrack_interface_info->{$name} = $value );
+    }
+}
+
+sub _access_spacetrack_interface {
+    my ( $self, $name ) = @_;
+    my $version = $self->{space_track_version};
+    my $spacetrack_interface_info =
+	$self->{_space_track_interface}[$version];
+    exists $spacetrack_interface_info->{$name}
+	or croak "Can not get $name for interface version $version";
+    return $spacetrack_interface_info->{$name};
+}
+
 #	_mutate_authen clears the session cookie and then sets the
 #	desired attribute
 
 # This clears the session cookie and cookie expiration, then co-routines
 # off to _mutate attrib.
 sub _mutate_authen {
-    $_[0]->set (session_cookie => undef, cookie_expires => 0);
-    goto &_mutate_attrib;
-}
-
-#	_mutate_cookie sets the session cookie, in both the object and
-#	the user agent's cookie jar. If the session cookie is undef, we
-#	delete the session cookie from the cookie jar; otherwise we set
-#	it to the specified value.
-
-# This mutates the user agent's cookie jar, then co-routines off to
-# _mutate attrib.
-sub _mutate_cookie {
-    my ( $self, $name, $value ) = @_;
-    my $agent = $self->_get_agent();
-    if ($agent && $agent->cookie_jar) {
-	if (defined $value) {
-	    $agent->cookie_jar->set_cookie (0, SESSION_KEY, $value,
-		SESSION_PATH, $self->{domain_space_track},
-		undef, 1, undef, undef, 1, {});
-	} else {
-	    $agent->cookie_jar->clear(
-		$self->{domain_space_track}, SESSION_PATH, SESSION_KEY);
-	}
-    }
+    $_[0]->logout();
     goto &_mutate_attrib;
 }
 
@@ -2962,6 +3821,20 @@ sub _mutate_number {
 Attribute $_[1] must be set to a numeric value.
 EOD
     goto &_mutate_attrib;
+}
+
+# _mutate_space_track_version() mutates the version of the interface
+# used to retrieve data from Space Track. Valid values are 1 and 2, with
+# any false value causing the default to be set.
+
+sub _mutate_space_track_version {
+    my ( $self, $name, $value ) = @_;
+    $value
+	or $value = DEFAULT_SPACE_TRACK_VERSION;
+    $value =~ m/ \A \d+ \z /smx
+	and $self->{_space_track_interface}[$value]
+	or croak "Invalid Space Track version $value";
+    return ( $self->{$name} = $value );
 }
 
 #	_mutate_verify_hostname mutates the verify_hostname attribute.
@@ -3037,6 +3910,61 @@ with dates being either Perl times, or numeric year-month-day, with any
 non-numeric character valid as punctuation.
 EOD
     return ( $opt, @ARGV );
+}
+
+# Parse an international launch ID in the form yyyy-sssp or yysssp.
+# In the yyyy-sssp form, the year can be two digits (in which case 57-99
+# are 1957-1999 and 00-56 are 2000-2056) and the dash can be any
+# non-alpha, non-digit, non-space character. In either case, trailing
+# fields are optional. If provided, the part ('p') can be multiple
+# alphabetic characters. Only fields actually specified will be
+# returned.
+
+sub _parse_international_id {
+    my ( $intl_id ) = @_;
+    my ( $year, $launch, $part );
+
+    if ( $intl_id =~
+	m< \A ( \d+ ) [^[:alpha:][:digit:]\s]
+	    (?: ( \d{3} ) ( [[:alpha:]]* ) )? \z >smx
+    ) {
+	( $year, $launch, $part ) = ( $1, $2, $3 );
+    } elsif ( $intl_id =~
+	m< \A ( \d\d ) (?: ( \d{3} ) ( [[:alpha:]]* ) )?  >smx
+    ) {
+	( $year, $launch, $part ) = ( $1, $2, $3 );
+    } else {
+	return;
+    }
+
+    $year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
+    my @parts = ( $year );
+    $launch
+	or return @parts;
+    push @parts, $launch;
+    $part
+	and push @parts, uc $part;
+    return @parts;
+}
+
+# Parse a date in the form yyyy-mm-dd, with either two- or four-digit
+# year, and month and day optional. The year is normalized to four
+# digits using the NORAD pivot date of 57 -- that is, 57-99 represent
+# 1957-1999, and 00-56 represent 2000-2056. The month and day are
+# optional. Only fields actually specified will be returned.
+
+sub _parse_launch_date {
+    my ( $date ) = @_;
+    my ( $year, $month, $day ) =
+	$date =~ m/ \A (\d+) (?:\D+ (\d+) (?: \D+ (\d+) )? )? /smx
+	    or return;
+    $year += $year < 57 ? 2000 : $year < 100 ? 1900 : 0;
+    my @parts = ( $year );
+    defined $month
+	or return @parts;
+    push @parts, $month;
+    defined $day and push @parts, $day;
+    return @parts;
 }
 
 #	_parse_retrieve_args parses the retrieve() options off its
@@ -3177,18 +4105,23 @@ EOD
 }
 
 #	_post is just like _get, except for the method used. DO NOT use
-#	this method in the login () method, or you get a bottomless
+#	this method in the login() method, or you get a bottomless
 #	recursion.
+#
+# THIS IS TO BE USED ONLY FOR THE SPACE TRACK V1 INTERFACE
 
 sub _post {
     my ($self, $path, @args) = @_;
     {	# Single-iteration loop
-	$self->{debug_url} or $self->{cookie_expires} > time () or do {
-	    my $resp = $self->login ();
+	$self->{debug_url}
+	    or $self->_check_cookie_generic( 1 )
+	    or do {
+	    my $resp = $self->_login_v1();
 	    return $resp unless $resp->is_success;
 	};
-	my $url = "$self->{scheme_space_track}://$self->{domain_space_track}/$path";
-	my $resp = $self->_dump_request( $url, @args) ||
+	my $url = join '/', $self->_make_space_track_base_url( 1 ),
+	    $path;
+	my $resp = $self->_dump_request( $url, { @args } ) ||
 	    $self->_get_agent()->post ($self->{debug_url} || $url, [@args]);
 	$self->_dump_headers( $resp );
 ##	return $resp unless $resp->is_success && !$self->{debug_url};
@@ -3197,7 +4130,7 @@ sub _post {
 	    or return $resp;
 	local $_ = $resp->content;
 	m/ login [.] pl /smxi and do {
-	    $self->{cookie_expires} = 0;
+	    $self->logout();
 	    redo;
 	};
 	return $resp;
@@ -3234,7 +4167,7 @@ sub _search_generic {
     exists $opt->{tle} or $opt->{tle} = 1;
     if ( $opt->{tle} ) {
 	my $with_name = $self->getv( 'with_name' );
-	$resp = $self->retrieve ($opt, sort {$a <=> $b} keys %id);
+	$resp = $self->_retrieve_v1 ($opt, sort {$a <=> $b} keys %id);
 	if ( $opt->{rcs} ) {
 	    my $content = $resp->content();
 	    my $replace = $with_name ? sub {
@@ -3262,6 +4195,7 @@ sub _search_generic {
 	$self->_add_pragmata($resp,
 	    'spacetrack-type' => 'search',
 	    'spacetrack-source' => 'spacetrack',
+	    'spacetrack-interface' => 1,
 	);
     }
     wantarray or return $resp;
@@ -3323,6 +4257,32 @@ sub _search_generic_tabulate {
     return;
 }
 
+{
+    my %exclude_names = (
+	rocket	=> [ map { quotemeta $_ } qw{ r/b akm pkm } ],
+	debris	=> [ map { quotemeta $_ } qw{ deb debris coolant
+	    shroud }, 'westford needles' ],
+    );
+
+    # _simulate_rest_exclude() simulates the results of a v1 exclusion
+    # on a v2 search, by filtering out all the bodies whose names meet
+    # the exclusion criteria.
+
+    sub _simulate_rest_exclude {
+	my ( $self, $opt, $data ) = @_;
+	defined $opt->{exclude}
+	    or return;
+	my @exclusion;
+	foreach my $exclude ( @{ $opt->{exclude} } ) {
+	    push @exclusion, @{ $exclude_names{$exclude} };
+	}
+	@exclusion
+	    or return;
+	my $re = join '|', @exclusion;
+	@{ $data } = grep { $_->{SATNAME} !~ m/$re/smxi } @{ $data };
+	return;
+    }
+}
 
 #	_source takes a filename, and returns the contents of the file
 #	as a list. It dies if anything goes wrong.
@@ -3391,6 +4351,10 @@ This attribute specifies the expiration time of the cookie. You should
 only set this attribute with a previously-retrieved value, which
 matches the cookie.
 
+The object maintains a separate copy of this attribute for each possible
+value of C<space_track_version>. Not all versions of the interface have
+expiring cookies.
+
 =item direct (boolean)
 
 This attribute specifies that orbital elements should be fetched
@@ -3406,7 +4370,12 @@ The user will not normally need to modify this, but if the web site
 changes names for some reason, this attribute may provide a way to get
 queries going again.
 
-The default is 'www.space-track.org'.
+The object maintains a separate copy of this attribute for each possible
+value of C<space_track_version>.
+
+The default is C<'www.space-track.org'> for version 1, and
+C<'beta.space-track.org'> for version 2. These will change if necessary
+to remain appropriate to the Space Track web site.
 
 =item fallback (boolean)
 
@@ -3461,7 +4430,21 @@ The default is C<'https'>.
 This attribute specifies the session cookie. You should only set it
 with a previously-retrieved value.
 
+The object maintains a separate copy of this attribute for each possible
+value of C<space_track_version>.
+
 The default is an empty string.
+
+=item space_track_version (integer)
+
+B<This attribute is unsupported>.
+
+This attribute specifies the version of the Space Track interface to use
+to retrieve data. Valid values are C<1> and C<2>, but C<2> is
+unsupported. If you set it to a false value (i.e. C<undef>, C<0>, or
+C<''>) it will be set to the default.
+
+The default is C<1>.
 
 =item url_iridium_status_kelso (text)
 

@@ -3,7 +3,7 @@ package main;
 use strict;
 use warnings;
 
-use Test::More 0.88;
+use Test::More 0.96;
 
 sub i_can ($);
 
@@ -51,6 +51,7 @@ is_deeply scalar Astro::SpaceTrack->attribute_names(), [ qw{
     password
     scheme_space_track
     session_cookie
+    space_track_version
     url_iridium_status_kelso
     url_iridium_status_mccants
     url_iridium_status_sladen
