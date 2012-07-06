@@ -35,7 +35,7 @@
             "Getopt::Long" : "0",
             "HTML::Parser" : "0",
             "HTTP::Response" : "0",
-            "HTTP::Status" : "0",
+            "HTTP::Status" : "6",
             "IO::File" : "0",
             "JSON" : "0",
             "LWP::Protocol::https" : "0",
@@ -44,6 +44,7 @@
             "Scalar::Util" : "1.07",
             "Text::ParseWords" : "0",
             "Time::Local" : "0",
+            "URI::Escape" : "0",
             "constant" : "0",
             "perl" : "5.006002",
             "strict" : "0",
@@ -54,11 +55,11 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.060_03"
+         "version" : "0.060_04"
       },
       "Astro::SpaceTrack::Parser" : {
          "file" : "lib/Astro/SpaceTrack/Parser.pm",
-         "version" : "0.060_03"
+         "version" : "0.060_04"
       }
    },
    "release_status" : "testing",
@@ -70,5 +71,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.060_03"
+   "version" : "0.060_04"
 }

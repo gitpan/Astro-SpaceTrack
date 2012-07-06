@@ -41,7 +41,7 @@ sub requires {
 	'Getopt::Long'		=> 0,
 	'HTML::Parser'		=> 0,
 	'HTTP::Response'	=> 0,
-	'HTTP::Status'		=> 0,
+	'HTTP::Status'		=> 6.0,	# For HTTP_* constants
 	'IO::File'		=> 0,
 	'JSON'			=> 0,	# For Space Track v2
 	'LWP::UserAgent'	=> 0,
@@ -50,6 +50,7 @@ sub requires {
 	'Scalar::Util'		=> 1.07,	# for openhandle.
 	'Text::ParseWords'	=> 0,
 	'Time::Local'		=> 0,
+	'URI::Escape'		=> 0,	# For Space Track v2
 	'constant'		=> 0,
 	'strict'		=> 0,
 	'warnings'		=> 0,
