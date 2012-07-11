@@ -35,6 +35,7 @@ Fengyun
 IDs
 ISP
 ISS
+JSON
 Kelso
 Kelso's
 kelso
@@ -42,6 +43,7 @@ login
 McCants
 mccants
 merchantability
+multimonth
 NORAD
 OID
 OIDs
@@ -74,6 +76,7 @@ tles
 txt
 unzip
 unzipped
+URI
 usa
 username
 webcmd

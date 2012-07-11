@@ -61,7 +61,7 @@ it.
 The Space Track web site is in the throes of implementing a new REST
 API, to replace the old screen-scraping API. This API is currently in
 beta. This module implements the REST API to the extent possible, but
-should not be used for production code at this point.
+should probably not be used for production code at this point.
 
 This module will use either the old (version 1) API or the new (version
 2) API, depending on the value of the C<space_track_version> attribute,
@@ -69,23 +69,43 @@ which can be either C<1> or C<2>, with C<1> being the default. It is
 anticipated that some time in the future the default of this attribute
 will become C<2>.
 
+I do not have a timing for the conversion, though I understand that a
+multimonth transition period is planned when the REST interface is
+complete. I also do not know the details of the transition plan. If they
+change web domains suddenly, you may be able to get yourself going again
+with the C<domain_space_track> attribute.
+
+At some point near the beginning of the transition period, the default
+value of the C<space_track_version> attribute will become C<2>, and the
+value of C<1> will become deprecated. Because I do not know the timing
+of any of this I can not commit to a deprecation schedule, but I can
+promise that setting C<space_track_version> to C<1> will throw an
+exception as soon after the decommissioning of the old web site as I can
+manage.
+
 Version 2 of the interface differs from version 1 in the following ways
-that are known to me at this time.  All are due to limitations in the
+that are known to me at this time. All are due to limitations in the
 functionality provided by version 2 of the interface, unless explicitly
 stated otherwise.
 
 =over
 
 =item The retrieve() method (which retrieves TLEs for given OIDs) is
-incapable of returning the common name of the body.
+incapable of returning the common name of the body. I am informed that
+there is already a feature request for this, but that it has not yet
+been prioritized. In the meantime, if you B<really> want common names in
+your TLE data, you can get them via the C<search_oid()> method.
 
 =item The C<spacetrack()> method (which returns predefined packages of
-TLEs) is unsupported, and throws an exception.
+TLEs) is unsupported, and throws an exception. I know of no work being
+done in this area.
 
 =item The C<-exclude> option to the C<search_*()> methods is not
 supported by version 2 of the interface. When version 2 is in use,
 C<Astro::SpaceTrack> filters the results of a search to simulate the
-functionality of version 1 of the interface.
+functionality of version 1 of the interface. I am informed that there is
+a request for this functionality, but that it has not yet been
+prioritized.
 
 =back
 
@@ -139,7 +159,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060_04';
+our $VERSION = '0.060_05';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -153,8 +173,12 @@ use Compress::Zlib ();
 use Getopt::Long;
 use HTTP::Response;
 use HTTP::Status qw{
-    HTTP_NOT_FOUND HTTP_OK HTTP_PRECONDITION_FAILED HTTP_UNAUTHORIZED
+    HTTP_NOT_FOUND
+    HTTP_I_AM_A_TEAPOT
     HTTP_INTERNAL_SERVER_ERROR
+    HTTP_OK
+    HTTP_PRECONDITION_FAILED
+    HTTP_UNAUTHORIZED
 };
 use IO::File;
 use JSON qw{};
@@ -179,6 +203,13 @@ use constant NO_RECORDS => 'No records found.';
 use constant SESSION_PATH => '/';
 
 use constant DEFAULT_SPACE_TRACK_VERSION => 1;
+
+use constant DUMP_NONE => 0;		# No dump
+use constant DUMP_TRACE => 0x01;	# Logic trace
+use constant DUMP_REQUEST => 0x02;	# Request content
+use constant DUMP_NO_EXECUTE => 0x04;	# Do not execute request
+use constant DUMP_COOKIE => 0x08;	# Dump cookies.
+use constant DUMP_HEADERS => 0x10;	# Dump headers.
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -254,7 +285,6 @@ my %mutator = (	# Mutators for the various attributes.
     addendum => \&_mutate_attrib,		# Addendum to banner text.
     banner => \&_mutate_attrib,
     cookie_expires => \&_mutate_spacetrack_interface,
-    debug_url => \&_mutate_attrib,	# Force the URL. Undocumented and unsupported.
     direct => \&_mutate_attrib,
     domain_space_track => \&_mutate_spacetrack_interface,
     dump_headers => \&_mutate_attrib,	# Dump all HTTP headers. Undocumented and unsupported.
@@ -313,9 +343,8 @@ sub new {
 
     my $self = {
 	banner => 1,	# shell () displays banner if true.
-	debug_url => undef,	# Not turned on
 	direct => 0,	# Do not direct-fetch from redistributors
-	dump_headers => 0,	# No dumping.
+	dump_headers => DUMP_NONE,	# No dumping.
 	fallback => 0,	# Do not fall back if primary source offline
 	filter => 0,	# Filter mode.
 	iridium_status_format => 'mccants',	# For historical reasons.
@@ -520,7 +549,6 @@ sub _box_score_v1 {
 
     my $resp = $self->_get ( 'perl/boxscore.pl' );
     $resp->is_success()
-	and not $self->{debug_url}
 	or return $resp;
 
     my $content = $resp->content;
@@ -571,10 +599,11 @@ sub _box_score_v1 {
     sub _box_score_v2 {
 	my ( $self ) = @_;
 
-	my $resp = $self->_get_rest( qw{ basicspacedata query class boxscore
-	    format json predicates all } );
+	my $resp = $self->spacetrack_query_v2( qw{
+	    basicspacedata query class boxscore
+	    format json predicates all
+	} );
 	$resp->is_success()
-	    and not $self->{debug_url}
 	    or return $resp;
 
 	my $data = JSON::decode_json( $resp->content() );
@@ -1096,8 +1125,6 @@ The following commands are defined:
       addendum = extra text for the shell () banner;
       banner = false to supress the shell () banner;
       cookie_expires = Perl date the session cookie expires;
-      debug_url = Override canned url for debugging - do not
-        set this in normal use;
       direct = true to fetch orbital elements directly
         from a redistributer. Currently this only affects the
         celestrak() method. The default is false.
@@ -1494,7 +1521,7 @@ sub _login_v1 {
     ($self->{username} && $self->{password}) or
 	return HTTP::Response->new (
 	    HTTP_PRECONDITION_FAILED, NO_CREDENTIALS);
-    $self->{dump_headers} and warn <<"EOD";
+    $self->{dump_headers} & DUMP_TRACE and warn <<"EOD";
 Logging in as $self->{username}.
 EOD
 
@@ -1516,7 +1543,7 @@ EOD
     $self->_record_cookie_generic( 1 )
 	or return HTTP::Response->new (HTTP_UNAUTHORIZED, LOGIN_FAILED);
 
-    $self->{dump_headers} and warn <<'EOD';
+    $self->{dump_headers} & DUMP_TRACE and warn <<'EOD';
 Login successful.
 EOD
     return HTTP::Response->new (HTTP_OK, undef, undef, "Login successful.\n");
@@ -1529,12 +1556,12 @@ sub _login_v2 {
     ( $self->{username} && $self->{password} ) or
 	return HTTP::Response->new (
 	    HTTP_PRECONDITION_FAILED, NO_CREDENTIALS);
-    $self->{dump_headers} and warn <<"EOD";
+    $self->{dump_headers} & DUMP_TRACE and warn <<"EOD";
 Logging in as $self->{username}.
 EOD
 
-    #	Do not use the _get_rest method to retrieve the session cookie,
-    #	unless you like bottomless recursions.
+    # Do not use the spacetrack_query_v2 method to retrieve the session
+    # cookie, unless you like bottomless recursions.
     my $url = $self->_make_space_track_base_url( 2 );
     my $resp = $self->_get_agent()->post(
 	"$url/ajaxauth/login", [
@@ -1549,7 +1576,7 @@ EOD
     $self->_record_cookie_generic( 2 )
 	or return HTTP::Response->new( HTTP_UNAUTHORIZED, LOGIN_FAILED );
 
-    $self->{dump_headers} and warn <<'EOD';
+    $self->{dump_headers} & DUMP_TRACE and warn <<'EOD';
 Login successful.
 EOD
     return HTTP::Response->new (HTTP_OK, undef, undef, "Login successful.\n");
@@ -1801,7 +1828,8 @@ sub _retrieve_v2 {
     local $_ = undef;
     my $resp;
     foreach my $oid ( @args ) {
-	$resp = $self->_get_rest( basicspacedata => 'query',
+	$resp = $self->spacetrack_query_v2(
+	    basicspacedata	=> 'query',
 	    class		=> 'tle',
 	    NORAD_CAT_ID	=> $oid,
 	    format		=> 'tle',
@@ -1985,7 +2013,6 @@ sub _retrieve_v2 {
 		$search_for );
 
 	    $rslt->is_success()
-		and not $self->{debug_url}
 		or return $rslt;
 
 	    my $data = JSON::decode_json( $rslt->content() );
@@ -2177,7 +2204,8 @@ sub __search_rest_raw {
 
     exists $args{class}
 	or $args{class} = 'satcat';
-    exists $args{CURRENT}
+    $args{class} ne 'satcat'
+	or exists $args{CURRENT}
 	or $args{CURRENT} = 'Y';
     exists $args{format}
 	or $args{format} = 'json';
@@ -2188,7 +2216,7 @@ sub __search_rest_raw {
 #   exists $args{limit}
 #	or $args{limit} = 1000;
 
-    my $resp = $self->_get_rest(
+    my $resp = $self->spacetrack_query_v2(
 	basicspacedata	=> 'query',
 	map { $_ => $args{$_} } sort keys %args,
     );
@@ -3226,45 +3254,106 @@ Requested file  doesn't exist");history.go(-1);
 
 =cut
 
-    ($resp->is_success() && !$self->{debug_url}) and do {
-	my $content = $resp->content ();
-	if ($content =~ m/ <html> /smx) {
-	    if ($content =~ m/ Requested \s file \s doesn't \s exist/smxi) {
-		$resp = HTTP::Response->new (HTTP_NOT_FOUND,
-		    "The file for catalog $catnum is missing.\n",
-		    undef, $content);
-	    } else {
-		$resp = HTTP::Response->new (HTTP_INTERNAL_SERVER_ERROR,
-		    "The file for catalog $catnum could not be retrieved.\n",
-		    undef, $content);
-	    }
+    $resp->is_success()
+	or return $resp;
+
+    my $content = $resp->content ();
+    if ($content =~ m/ <html> /smx) {
+	if ($content =~ m/ Requested \s file \s doesn't \s exist/smxi) {
+	    $resp = HTTP::Response->new (HTTP_NOT_FOUND,
+		"The file for catalog $catnum is missing.\n",
+		undef, $content);
 	} else {
-	    $catnum and $resp->content (
-		Compress::Zlib::memGunzip ($resp->content));
-	    # SpaceTrack returns status 200 on a non-existent catalog
-	    # number, but whatever content they send back doesn't unzip, so
-	    # we catch it here.
-	    defined ($resp->content ())
-		or return $self->_no_such_catalog (spacetrack => $catnum);
-	    $resp->remove_header ('content-disposition');
-	    $resp->header (
-		'content-type' => 'text/plain',
-##		'content-length' => length ($resp->content),
-	    );
-	    $self->_convert_content ($resp);
-	    $self->_add_pragmata($resp,
-		'spacetrack-type' => 'orbit',
-		'spacetrack-source' => 'spacetrack',
-		'spacetrack-interface' => 1,
-	    );
+	    $resp = HTTP::Response->new (HTTP_INTERNAL_SERVER_ERROR,
+		"The file for catalog $catnum could not be retrieved.\n",
+		undef, $content);
 	}
-    };
+    } else {
+	$catnum and $resp->content (
+	    Compress::Zlib::memGunzip ($resp->content));
+	# SpaceTrack returns status 200 on a non-existent catalog
+	# number, but whatever content they send back doesn't unzip, so
+	# we catch it here.
+	defined ($resp->content ())
+	    or return $self->_no_such_catalog (spacetrack => $catnum);
+	$resp->remove_header ('content-disposition');
+	$resp->header (
+	    'content-type' => 'text/plain',
+##	    'content-length' => length ($resp->content),
+	);
+	$self->_convert_content ($resp);
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'orbit',
+	    'spacetrack-source' => 'spacetrack',
+	    'spacetrack-interface' => 1,
+	);
+    }
     return $resp;
 }
 
 sub _spacetrack_v2 {
     # TODO figure out how to make this work.
     croak 'Bulk data downloads not supported by REST API';
+}
+
+=for html <a name="spacetrack_query_v2"></a>
+
+=item $resp = $st->spacetrack_query_v2( @path );
+
+This method exposes the Space Track version 2 interface (a.k.a the REST
+interface). It has nothing to do with the (probably badly-named)
+C<spacetrack()> method. Unlike other methods that interface to Space
+Track, this method uses version 2 of the Space Track interface
+regardless of the value of the C<space_track_version> attribute.
+
+The arguments are the arguments to the REST interface. These will be
+URI-escaped, and a login will be performed if necessary. This method
+returns an C<HTTP::Response> object containing the results of the
+operation.
+
+Except for the URI escaping of the arguments and the implicit login,
+this method interfaces directly to Space Track. It is provided for those
+who want a way to experiment with the REST interface, or who wish to do
+something not covered by the higher-level methods.
+
+For example, if you want the JSON version of the satellite box score
+(rather than the tab-delimited version provided by the C<box_score()>
+method) you will find the JSON in the response object of the following
+call:
+
+ my $resp = $st->spacetrack_query_v2( qw{
+     basicspacedata query class boxscore
+     format json predicates all
+     } );
+ );
+
+=cut
+
+sub spacetrack_query_v2 {
+    my ( $self, @args ) = @_;
+    my $url = $self->_make_space_track_base_url( 2 );
+
+    if ( my $resp = $self->_dump_request(
+	    args	=> \@args,
+	    method	=> 'GET',
+	    url		=> $url,
+	    version	=> 2,
+	) ) {
+	return $resp;
+    }
+
+    my $cgi = join '/', map { URI::Escape::uri_escape( $_ ) } @args;
+
+    $self->_check_cookie_generic( 2 )
+	or do {
+	my $resp = $self->_login_v2();
+	$resp->is_success()
+	    or return $resp;
+    };
+##  warn "Debug - $url/$cgi";
+    my $resp = $self->_get_agent()->get( "$url/$cgi" );
+    $self->_dump_headers( $resp );
+    return $resp;
 }
 
 
@@ -3304,7 +3393,7 @@ sub _record_cookie_generic {
 
     my ( $cookie, $expires );
     $self->_get_agent()->cookie_jar->scan( sub {
-	    $self->{dump_headers} > 1
+	    $self->{dump_headers} & DUMP_COOKIE
 		and _dump_cookie( "_record_cookie_generic:\n", @_ );
 	    $_[4] eq $domain
 		or return;
@@ -3318,11 +3407,11 @@ sub _record_cookie_generic {
 
     if ( defined $cookie ) {
 	$interface_info->{session_cookie} = $cookie;
-	$self->{dump_headers}
+	$self->{dump_headers} & DUMP_TRACE
 	    and warn "Session cookie: $cookie\n";	## no critic (RequireCarping)
 	if ( exists $interface_info->{cookie_expires} ) {
 	    $interface_info->{cookie_expires} = $expires;
-	    $self->{dump_headers}
+	    $self->{dump_headers} & DUMP_TRACE
 		and warn 'Cookie expiration: ',
 		    strftime( '%d-%b-%Y %H:%M:%S', localtime $expires ),
 		    " ($expires)\n";	## no critic (RequireCarping)
@@ -3330,7 +3419,7 @@ sub _record_cookie_generic {
 	}
 	return $interface_info->{session_cookie} ? 1 : 0;
     } else {
-	$self->{dump_headers}
+	$self->{dump_headers} & DUMP_TRACE
 	    and warn "Session cookie not found\n";	## no critic (RequireCarping)
 	return;
     }
@@ -3459,7 +3548,8 @@ use Data::Dumper;
 
 sub _dump_headers {
     my ( $self, $resp ) = @_;
-    $self->{dump_headers} or return;
+    $self->{dump_headers} & DUMP_HEADERS
+	or return;
     local $Data::Dumper::Terse = 1;
     my $rqst = $resp->request;
     $rqst = ref $rqst ? $rqst->as_string : "undef\n";
@@ -3475,30 +3565,28 @@ sub _dump_headers {
 
 #	_dump_request dumps the request if desired.
 #
-#	If the debug_url is defined, and has the 'dump-request:' scheme,
-#	AND any of several YAML modules can be loaded, this routine
-#	returns an HTTP::Response object with status HTTP_OK and whose
-#	content is the request and its arguments encoded in YAML.
+#	If the dump_request attribute has the DUMP_REQUEST bit set, this
+#	routine dumps the request. If the DUMP_NO_EXECUTE bit is set,
+#	the dump is returned in the content of an HTTP::Response object,
+#	with the response code set to HTTP_I_AM_A_TEAPOT. Otherwise the
+#	request is dumped to STDERR.
 #
-#	If any of the conditions fails, this module simply returns. The
-#	moral: don't try to dump requests unless YAML is installed.
+#	If any of the conditions fails, this module simply returns.
 
 sub _dump_request {
-    my ( $self, $url, $args ) = @_;
-    my $display = $self->{dump_headers} & 0x02;
-    my $respond = ( $self->{debug_url} || '' ) =~ m/ \A dump-request: /smx;
-    $display or $respond or return;
-    my $dumper = _get_yaml_dumper() or return;
-    (my $method = (caller 1)[3]) =~ s/ \A (?: .* :: )? _? //smx;
-    my %data = (
-	args => $args,
-	method => $method,
-	url => $url,
-    );
-    my $yaml = $dumper->( \%data );
-    $yaml =~ s/ \n{2,} /\n/smxg;
-    $display and print $yaml;
-    $respond and return HTTP::Response->new( HTTP_OK, undef, undef, $yaml );
+    my ( $self, %args ) = @_;
+    $self->{dump_headers} & DUMP_REQUEST
+	or return;
+
+    my $dumper = _get_dumper( pretty => 1 ) or return;
+
+    my $yaml = $dumper->( \%args );
+
+    $self->{dump_headers} & DUMP_NO_EXECUTE
+	and return HTTP::Response->new(
+	HTTP_I_AM_A_TEAPOT, undef, undef, $yaml );
+
+    warn $yaml;
     return;
 }
 
@@ -3542,36 +3630,44 @@ sub _format_launch_date_rest {
 #	THIS IS TO BE USED ONLY FOR THE SPACETRACK V1 INTERFACE
 
 sub _get {
-    my ($self, $path, @args) = @_;
+    my ( $self, $path, %args ) = @_;
+
+    my $url = join '/', $self->_make_space_track_base_url( 1 ), $path;
+
+    if ( my $resp = $self->_dump_request(
+	    args	=> \%args,
+	    method	=> 'GET',
+	    url		=> $url,
+	    version	=> 1,
+	) ) {
+	return $resp;
+    }
+
     my $cgi = '';
-    {
-	my @unpack = @args;
-	while (@unpack) {
-	    my ( $name, $val ) = splice @unpack, 0, 2;
-	    defined $val or $val = '';
-	    $cgi .= "&$name=$val";
-	}
+    foreach my $name ( sort keys %args ) {
+	my $val = $args{$name};
+	defined $val
+	    or $val = '';
+	$cgi .= sprintf '&%s=%s', map { URI::Escape::uri_escape( $_ ) }
+	    $name, $val;
     }
     $cgi and substr( $cgi, 0, 1, '?' );
     {	# Single-iteration loop
-	$self->{debug_url}
-	    or $self->_check_cookie_generic( 1 )
+
+	$self->_check_cookie_generic( 1 )
 	    or do {
 	    my $resp = $self->_login_v1();
-	    return $resp unless $resp->is_success;
+	    $resp->is_success()
+		or return $resp;
 	};
-	my $url = join '/', $self->_make_space_track_base_url( 1 ),
-	    $path;
-	my $resp = $self->_dump_request( $url, { @args } ) ||
-	    $self->_get_agent()->get (($self->{debug_url} || $url) . $cgi);
+
+	my $resp = $self->_get_agent()->get( $url . $cgi);
 	$self->_dump_headers( $resp );
-##	return $resp unless $resp->is_success && !$self->{debug_url};
 	$resp->is_success()
-	    and not $self->{debug_url}
 	    or return $resp;
 	local $_ = $resp->content;
 	m/ login [.] pl /smxi and do {
-	    $self->logout() = 0;
+	    $self->logout();
 	    redo;
 	};
 	return $resp;
@@ -3613,38 +3709,6 @@ sub _get_agent {
     return $agent;
 }
 
-# _get_rest() gets the given path on the domain. Arguments are the
-# individual elements of the path. These will be URI-escaped. In other
-# words, DO NOT pass aggregated path elements like "foo/bar"; instead
-# pass 'foo' and 'bar' as separate arguments.
-#
-# This method checks the currency of the session cookie, and executes a
-# login if it deems it necessary.  The normal return is the
-# HTTP::Response object from the get (), but if a login was attempted
-# and failed, the HTTP::Response object from the login will be returned.
-#
-# THIS IS TO BE USED ONLY FOR THE SPACETRACK V2 INTERFACE
-
-sub _get_rest {
-    my ( $self, @args ) = @_;
-    my $cgi = join '/', map { URI::Escape::uri_escape( $_ ) } @args;
-
-    $self->{debug_url}
-	or $self->_check_cookie_generic( 2 )
-	or do {
-	my $resp = $self->_login_v2();
-	$resp->is_success()
-	    or return $resp;
-    };
-    my $url = $self->_make_space_track_base_url( 2 );
-##  warn "Debug - $url/$cgi";
-    my $resp = $self->_dump_request( $url, \@args ) ||
-	$self->_get_agent()->get( ( $self->{debug_url} || $url ) .
-	    "/$cgi" );
-    $self->_dump_headers( $resp );
-    return $resp;
-}
-
 # _get_space_track_domain() returns the domain name portion of the Space
 # Track URL from the appropriate attribute. The argument is the
 # interface version number, which defaults to the value of the
@@ -3657,52 +3721,31 @@ sub _get_space_track_domain {
     return $self->{_space_track_interface}[$version]{domain_space_track};
 }
 	
-{
+# _get_dumper() retrieves a dumper and returns a code reference to it.
+# The dumper will pretty-print if C<< ( pretty => 1 ) >> is passed as
+# argument and the dumper is capable of it.
 
-    my ($dumper, $loader, $package, $tried);
-
-#	_get_yaml_dumper retrieves a YAML dumper. If one can be found,
-#	a code reference to it is returned. Otherwise we simply return.
-
-    sub _get_yaml_dumper {
-	$dumper and return $dumper;
-	($package ||= _get_yaml_package()) or return;
-	$dumper = $package->can('Dump');
-	return $dumper;
+sub _get_dumper {
+    my %arg = @_;
+    my $json = JSON->new()->utf8( 1 );
+    $arg{pretty} and $json->pretty( 1 );
+    return sub {
+	return $json->encode( $_[0] );
     }
- 
-#	__get_yaml_loader retrieves a YAML loader. If one can be found,
-#	a code reference to it is returned. Otherwise we simply return.
+}
+
+# __get_loader() retrieves a loader. A code reference to it is returned.
 #
-#	NOTE WELL: This subroutine is for the benefit of
-#	t/spacetrack_request.t, and is called by that code. The leading
-#	double underscore is to flag it to Perl::Critic as package
-#	private rather than module private.
+# NOTE WELL: This subroutine is for the benefit of
+# t/spacetrack_request.t, and is called by that code. The leading double
+# underscore is to flag it to Perl::Critic as package private rather
+# than module private.
 
-    sub __get_yaml_loader {
-	$loader and return $loader;
-	($package ||= _get_yaml_package()) or return;
-	$loader = $package->can('Load');
-	return $loader;
-    }
-
-#	_get_yaml_package tries to load several YAML packages, returning
-#	the name of the first which is loaded successfully. If none can
-#	be loaded, it returns undef. Subsequent calls simply return
-#	whatever the first call did.
-#
-#	Well, at the moment all it tries is YAML.
-
-    sub _get_yaml_package {
-	$tried and return $package;
-	$tried++;
-	foreach my $try ( qw{ YAML } ) {
-	    ( my $fn = $try ) =~ s{ :: }{/}smxg;
-	    $fn .= '.pm';
-	    eval { require $fn; 1 } or next;
-	    return ( $package = $try );
-	}
-	return $package;
+sub __get_loader {
+    my ( $invocant, %arg ) = @_;
+    my $json = JSON->new()->utf8( 1 );
+    return sub {
+	return $json->decode( $_[0] );
     }
 }
 
@@ -3789,9 +3832,6 @@ sub _mung_login_status {
 sub _mutate_attrib {
     return ($_[0]{$_[1]} = $_[2]);
 }
-
-# TODO - for this to work, I need to be able to clear the cookie on
-# setting the domain. I think I need a logout() method.
 
 {
     my %need_logout = map { $_ => 1 } qw{ domain_space_track };
@@ -4141,22 +4181,29 @@ EOD
 # THIS IS TO BE USED ONLY FOR THE SPACE TRACK V1 INTERFACE
 
 sub _post {
-    my ($self, $path, @args) = @_;
+    my ( $self, $path, %args ) = @_;
+
+    my $url = join '/', $self->_make_space_track_base_url( 1 ), $path;
+
+    if ( my $resp = $self->_dump_request(
+	    args	=> \%args,
+	    method	=> 'POST',
+	    url		=> $url,
+	    version	=> 1,
+	) ) {
+	return $resp;
+    }
+
     {	# Single-iteration loop
-	$self->{debug_url}
-	    or $self->_check_cookie_generic( 1 )
+	$self->_check_cookie_generic( 1 )
 	    or do {
 	    my $resp = $self->_login_v1();
 	    return $resp unless $resp->is_success;
 	};
-	my $url = join '/', $self->_make_space_track_base_url( 1 ),
-	    $path;
-	my $resp = $self->_dump_request( $url, { @args } ) ||
-	    $self->_get_agent()->post ($self->{debug_url} || $url, [@args]);
+
+	my $resp = $self->_get_agent()->post( $url, \%args );
 	$self->_dump_headers( $resp );
-##	return $resp unless $resp->is_success && !$self->{debug_url};
 	$resp->is_success()
-	    and not $self->{debug_url}
 	    or return $resp;
 	local $_ = $resp->content;
 	m/ login [.] pl /smxi and do {
@@ -4253,9 +4300,7 @@ sub _search_generic_tabulate {
 
     foreach my $name ( @args ) {
 	defined (my $resp = $poster->($self, $name, $opt)) or next;
-##	return $resp unless $resp->is_success && !$self->{debug_url};
 	$resp->is_success()
-	    and not $self->{debug_url}
 	    or return $resp;
 	my $content = $resp->content;
 	next if $content =~ m/ No \s results \s found /smxi;
