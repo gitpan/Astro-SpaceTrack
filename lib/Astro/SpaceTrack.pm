@@ -48,9 +48,9 @@ C<celestrak()> C<'sts'> catalog and the C<spaceflight()> C<'SHUTTLE'>
 argument, because of the end of the Space Shuttle program on July 21
 2011.
 
-With the first release on or after July 22 2012, all uses of
-C<celestrak()> C<'sts'> or C<spaceflight()> C<'SHUTTLE'> will generate a
-deprecation warning.
+With the first release on or after January 22 2013, all uses of
+C<celestrak()> C<'sts'> or C<spaceflight()> C<'SHUTTLE'> will generate
+an exception.
 
 Six further months later, the deprecated functionality will be removed.
 This means (probably) you will get a C<404> error when you try to use
@@ -107,6 +107,11 @@ functionality of version 1 of the interface. I am informed that there is
 a request for this functionality, but that it has not yet been
 prioritized.
 
+=item The C<-sort> and C<-descending> retrieval options are ignored. The
+issue is that unless you do the equivalent of C<-sort=epoch -descending>
+the new interface gives you the oldest data on record, not the newest.
+This may change as the Space Track code evolves.
+
 =back
 
 =head1 DESCRIPTION
@@ -159,7 +164,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060_06';
+our $VERSION = '0.060_07';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -184,7 +189,7 @@ use IO::File;
 use JSON qw{};
 use LWP::UserAgent;	# Not in the base.
 use POSIX qw{strftime};
-use Scalar::Util 1.07 qw{ blessed };
+use Scalar::Util 1.07 qw{ blessed openhandle };
 use Text::ParseWords;
 use Time::Local;
 use URI::Escape qw{};
@@ -210,6 +215,10 @@ use constant DUMP_REQUEST => 0x02;	# Request content
 use constant DUMP_NO_EXECUTE => 0x04;	# Do not execute request
 use constant DUMP_COOKIE => 0x08;	# Dump cookies.
 use constant DUMP_HEADERS => 0x10;	# Dump headers.
+
+use constant SPACE_TRACK_V2_OPTIONS => [
+    'json!'	=> '(Return TLEs in JSON format)',
+];
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -459,7 +468,16 @@ This method returns a list of legal attribute names.
 =cut
 
 sub attribute_names {
-    return wantarray ? sort keys %mutator : [sort keys %mutator]
+    my ( $self ) = @_;
+    ref $self
+	or return wantarray ? sort keys %mutator : [sort keys %mutator];
+    my $space_track_version = $self->getv( 'space_track_version' );
+    my @names = grep {
+	$mutator{$_} == \&_mutate_spacetrack_interface ?
+	exists $self->{_space_track_interface}[$space_track_version]{$_}
+	: 1
+    } sort keys %mutator;
+    return wantarray ? @names : \@names;
 }
 
 
@@ -744,6 +762,8 @@ sub celestrak {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
+    $self->get( 'space_track_version' ) > 1
+	and unshift @args, SPACE_TRACK_V2_OPTIONS;
     @args = _parse_retrieve_args( @args );
     my $opt = shift @args;
 
@@ -751,27 +771,23 @@ sub celestrak {
     $self->_deprecation_notice( celestrak => $name );
 
     $self->{direct}
-	and return $self->_celestrak_direct ($opt, $name);
+	and return $self->_celestrak_direct( $opt, $name );
     my $resp = $self->_get_agent()->get (
 	"http://celestrak.com/SpaceTrack/query/$name.txt");
-    if (my $check = $self->_celestrak_response_check($resp, $name)) {
+    if ( my $check = $self->_celestrak_response_check( $resp, $name ) ) {
 	return $check;
     }
     $self->_convert_content ($resp);
     $self->_dump_headers( $resp );
-    $resp = $self->_handle_observing_list ($opt, $resp->content);
-    return ($resp->is_success || !$self->{fallback}) ? $resp :
-	$self->_celestrak_direct ($opt, $name);
+    $resp = $self->_handle_observing_list( $opt, $resp->content() );
+    return ( $resp->is_success || !$self->{fallback} ) ? $resp :
+	$self->_celestrak_direct( $opt, $name );
 }
 
 sub _celestrak_direct {
-    my ($self, @args) = @_;
+    my ( $self, $opt, $name ) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args( @args );
-##  my $opt = shift @args;
-    shift @args;	# $opt not used
-    my $name = shift @args;
     my $resp = $self->_get_agent()->get (
 	"http://celestrak.com/NORAD/elements/$name.txt");
     if (my $check = $self->_celestrak_response_check($resp, $name, 'direct')) {
@@ -981,20 +997,24 @@ You can specify the L</retrieve> options on this method as well.
 
 sub file {
     my ($self, @args) = @_;
-    @args = _parse_retrieve_args( @args );
-    my $opt = shift @args;
+
+    $self->get( 'space_track_version' ) > 1
+	and unshift @args, SPACE_TRACK_V2_OPTIONS;
+    my ( $opt, $file ) = _parse_retrieve_args( @args );
 
     delete $self->{_pragmata};
-    my $name = shift @args;
-    ref $name and fileno ($name)
-	and return $self->_handle_observing_list (<$name>);
-    -e $name or return HTTP::Response->new (
-	HTTP_NOT_FOUND, "Can't find file $name");
-    my $fh = IO::File->new($name, '<') or
-	return HTTP::Response->new (
-	    HTTP_INTERNAL_SERVER_ERROR, "Can't open $name: $!");
+
+    if ( ! openhandle( $file ) ) {
+	-e $file or return HTTP::Response->new (
+	    HTTP_NOT_FOUND, "Can't find file $file");
+	my $fh = IO::File->new($file, '<') or
+	    return HTTP::Response->new (
+		HTTP_INTERNAL_SERVER_ERROR, "Can't open $file: $!");
+	$file = $fh;
+    }
+
     local $/ = undef;
-    return $self->_handle_observing_list ($opt, <$fh>)
+    return $self->_handle_observing_list( $opt, <$file> )
 }
 
 
@@ -1685,6 +1705,9 @@ The legal options are:
    specifies the data be returned in descending order.
  end_epoch date
    specifies the end epoch for the desired data.
+ json
+   specifies the TLE be returned in JSON format
+   (space_track_version == 2 only!)
  last5
    specifies the last 5 element sets be retrieved.
    Ignored if start_epoch or end_epoch specified.
@@ -1814,33 +1837,35 @@ sub _retrieve_v2 {
     my ( $self, @args ) = @_;
     delete $self->{_pragmata};
     # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
-    @args = _parse_retrieve_args( @args );
+    # https://beta.space-track.org/basicspacedata/query/class/tle/format/tle/NORAD_CAT_ID/25544,36411,26871,27422/orderby/EPOCH%20desc/sublimit/1
+    @args = _parse_retrieve_args(
+	SPACE_TRACK_V2_OPTIONS,
+	@args );
     my $opt = _parse_retrieve_dates( shift @args );
 
-    $opt = $self->_convert_retrieve_options_to_rest( $opt );
+    my $rest = $self->_convert_retrieve_options_to_rest( $opt );
 
     # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
 
     @args
 	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
+    defined $rest->{format}
+	or $rest->{format} = 'tle';
+    $rest->{orderby} = 'EPOCH desc';
 
-    my $content = '';
-    local $_ = undef;
-    my $resp;
-    foreach my $oid ( @args ) {
-	$resp = $self->spacetrack_query_v2(
-	    basicspacedata	=> 'query',
-	    class		=> 'tle',
-	    NORAD_CAT_ID	=> $oid,
-	    format		=> 'tle',
-	    map { $_ => $opt->{$_} } sort keys %{ $opt },
-	);
-	$resp->is_success()
-	    or return $resp;
-	$_ = $resp->content;
-	next if m/ function [.] key-exists /smxi;
-	$content .= $_;
-    }
+    my $resp = $self->spacetrack_query_v2(
+	basicspacedata	=> 'query',
+	class		=> 'tle',
+	NORAD_CAT_ID	=> join( ',', @args ),
+	map { $_ => $rest->{$_} } sort keys %{ $rest },
+    );
+    $resp->is_success()
+	or return $resp;
+    my $content = $resp->content;
+    $content =~ m/ function [.] key-exists /smxi
+	and $content = '';
+    $content eq '[]'
+	and $content = '';
     $content
 	or return HTTP::Response->new ( HTTP_NOT_FOUND, NO_RECORDS );
     $resp->content( $content );
@@ -1897,12 +1922,15 @@ sub _retrieve_v2 {
 		$opt->{end_epoch}[4] + 1,
 		$opt->{end_epoch}[3];
 	} else {
-	    $rest{limit} = $opt->{last5} ? 5 : 1;
+	    $rest{sublimit} = $opt->{last5} ? 5 : 1;
 	}
 
 	$rest{orderby} = ( $rest_sort_map{$opt->{sort} || 'catnum'} ||
 	    'NORAD_CAT_ID' )
 	.  ( $opt->{descending} ? ' desc' : ' asc' );
+
+	$opt->{json}
+	    and $rest{format} = 'json';
 
 	foreach my $name ( qw{ class format } ) {
 	    defined $opt->{$name}
@@ -1989,27 +2017,21 @@ sub _retrieve_v2 {
     };
 
     sub _search_rest {
-	my ( $self, @args ) = @_;
+	my ( $self, $pred, $xfrm, @args ) = @_;
 	delete $self->{_pragmata};
 
-	@args = _parse_search_args( @args );
-	delete $self->{_pragmata};
-
-	@args = _parse_retrieve_args( @args );
+	@args = _parse_search_args( SPACE_TRACK_V2_OPTIONS, @args );
 	my $opt = shift @args;
 
 	my $want_tle = exists $opt->{tle} ? $opt->{tle} : 1;
 
 	my $rest_args = $self->_convert_search_options_to_rest( $opt );
 
-	my @search_list = ref $args[-1] eq 'ARRAY' ? @{ pop @args } : (
-	    pop @args );
-
 	my @found;
 
-	foreach my $search_for ( @search_list ) {
+	foreach my $search_for ( map { $xfrm->( $_ ) } @args ) {
 
-	    my $rslt = $self->__search_rest_raw( %{ $rest_args }, @args,
+	    my $rslt = $self->__search_rest_raw( %{ $rest_args }, $pred,
 		$search_for );
 
 	    $rslt->is_success()
@@ -2032,19 +2054,28 @@ sub _retrieve_v2 {
 	    $opt->{format} = 'json';
 	    $rest_args = $self->_convert_retrieve_options_to_rest( $opt );
 
+	    $rslt = $self->_retrieve_v2( $opt,
+		map { $_->{NORAD_CAT_ID} } @found );
+	    $rslt->is_success()
+		or return $rslt;
+	    my %search_info = map { $_->{NORAD_CAT_ID} => $_ } @found;
+	    my $bodies = JSON::decode_json( $rslt->content() );
 	    my $content;
-	    foreach my $datum ( @found ) {
-		$rslt = $self->_retrieve_v2( $opt,
-		    $datum->{NORAD_CAT_ID} );
-		$rslt->is_success()
-		    or return $rslt;
-		my $bodies = JSON::decode_json( $rslt->content() );
-		foreach my $body ( @{ $bodies } ) {
+	    foreach my $body ( @{ $bodies } ) {
+		my $info = $search_info{$body->{NORAD_CAT_ID}};
+		if ( $opt->{json} ) {
+		    $with_name
+			and $body->{SATNAME} = $info->{SATNAME};
+		    if ( $opt->{rcs} ) {
+			$body->{RCSSOURCE} = $info->{RCSSOURCE};
+			$body->{RCSVALUE} = $info->{RCSVALUE};
+		    }
+		} else {
 		    my @line_0;
 		    $with_name
-			and push @line_0, $datum->{SATNAME};
+			and push @line_0, $info->{SATNAME};
 		    $opt->{rcs}
-			and push @line_0, "--rcs $datum->{RCSVALUE}";
+			and push @line_0, "--rcs $info->{RCSVALUE}";
 		    @line_0
 			and $content .= join( ' ', @line_0 ) . "\n";
 		    $content .= <<"EOD";
@@ -2053,6 +2084,9 @@ $body->{TLE_LINE2}
 EOD
 		}
 	    }
+
+	    $opt->{json}
+		and $content = JSON::encode_json( $bodies );
 
 	    $rslt = HTTP::Response->new( HTTP_OK, undef, undef, $content );
 	    $self->_add_pragmata( $rslt,
@@ -2064,14 +2098,18 @@ EOD
 	} else {
 
 	    my $content;
-	    foreach my $datum (
-		\%headings,
-		@found
-	    ) {
-		$content .= join( "\t",
-		    map { defined $datum->{$_} ? $datum->{$_} : '' }
-		    @heading_order
-		) . "\n";
+	    if ( $opt->{json} ) {
+		$content = JSON::encode_json( \@found );
+	    } else {
+		foreach my $datum (
+		    \%headings,
+		    @found
+		) {
+		    $content .= join( "\t",
+			map { defined $datum->{$_} ? $datum->{$_} : '' }
+			@heading_order
+		    ) . "\n";
+		}
 	    }
 	    $rslt = HTTP::Response->new( HTTP_OK, undef, undef, $content );
 	    $self->_add_pragmata( $rslt,
@@ -2370,10 +2408,7 @@ sub _search_date_v1 {
 }
 
 sub _search_date_v2 {	## no critic (RequireArgUnpacking)
-    my ( $self, @args ) = @_;
-    ( my $opt, @args ) = _parse_search_args( @args );
-    @_ = ( $self, $opt, LAUNCH => [
-	    map { _format_launch_date_rest( $_ ) } @args ] );
+    splice @_, 1, 0, LAUNCH => \&_format_launch_date_rest;
     goto &_search_rest;
 }
 
@@ -2459,10 +2494,7 @@ sub _search_decay_v1 {
 }
 
 sub _search_decay_v2 {	## no critic (RequireArgUnpacking)
-    my ( $self, @args ) = @_;
-    ( my $opt, @args ) = _parse_search_args( @args );
-    @_ = ( $self, $opt, DECAY => [
-	    map { _format_launch_date_rest( $_ ) } @args ] );
+    splice @_, 1, 0, DECAY => \&_format_launch_date_rest;
     goto &_search_rest;
 }
 
@@ -2551,10 +2583,7 @@ sub _search_id_v1 {
 }
 
 sub _search_id_v2 {	## no critic (RequireArgUnpacking)
-    my ( $self, @args ) = @_;
-    ( my $opt, @args ) = _parse_search_args( @args );
-    @_ = ( $self, $opt, INTLDES => [
-	    map { _format_international_id_rest( $_ ) } @args ] );
+    splice @_, 1, 0, INTLDES => \&_format_international_id_rest;
     goto &_search_rest;
 }
 
@@ -2635,10 +2664,7 @@ sub _search_name_v1 {
 }
 
 sub _search_name_v2 {	## no critic (RequireArgUnpacking)
-    my ( $self, @args ) = @_;
-    ( my $opt, @args ) = _parse_search_args( @args );
-    @_ = ( $self, $opt, SATNAME => [
-	    map { "~~$_" } @args ] );
+    splice @_, 1, 0, SATNAME => sub { return ( map { "~~$_" } @_ ) };
     goto &_search_rest;
 }
 
@@ -2738,9 +2764,7 @@ sub _search_oid_v1 {
 }
 
 sub _search_oid_v2 {	## no critic (RequireArgUnpacking)
-    my ( $self, @args ) = @_;
-    ( my $opt, @args ) = _parse_search_args( @args );
-    @_ = ( $self, $opt, NORAD_CAT_ID => \@args );
+    splice @_, 1, 0, NORAD_CAT_ID => sub { return @_ };
     goto &_search_rest;
 }
 
@@ -3331,7 +3355,13 @@ call:
 
 sub spacetrack_query_v2 {
     my ( $self, @args ) = @_;
-    my $url = $self->_make_space_track_base_url( 2 );
+
+    # Note that we need to add the comma to URI::Escape's RFC3986 list,
+    # since Space Track does not decode it.
+    my $url = $self->_make_space_track_base_url( 2 ) . '/' .
+	join '/', map {
+	    URI::Escape::uri_escape( $_, '^A-Za-z0-9.,_~-' )
+	} @args;
 
     if ( my $resp = $self->_dump_request(
 	    args	=> \@args,
@@ -3342,8 +3372,6 @@ sub spacetrack_query_v2 {
 	return $resp;
     }
 
-    my $cgi = join '/', map { URI::Escape::uri_escape( $_ ) } @args;
-
     $self->_check_cookie_generic( 2 )
 	or do {
 	my $resp = $self->_login_v2();
@@ -3351,7 +3379,7 @@ sub spacetrack_query_v2 {
 	    or return $resp;
     };
 ##  warn "Debug - $url/$cgi";
-    my $resp = $self->_get_agent()->get( "$url/$cgi" );
+    my $resp = $self->_get_agent()->get( $url );
     $self->_dump_headers( $resp );
     return $resp;
 }
@@ -3482,10 +3510,10 @@ sub _check_cookie_generic {
 
     my %deprecate = (
 	celestrak => {
-	    sts	=> 1,
+	    sts	=> 2,
 	},
 	spaceflight => {
-	    shuttle	=> 1,
+	    shuttle	=> 2,
 	},
     );
 
@@ -3761,11 +3789,11 @@ sub __get_loader {
 #	catalog number and name.
 
 sub _handle_observing_list {
-    my ($self, @args) = @_;
+    my ( $self, $opt, @args ) = @_;
     my (@catnum, @data);
 
-    @args = _parse_retrieve_args( @args );
-    my $opt = shift @args;
+    # Do not _parse_retrieve_args() here; we expect our caller to handle
+    # this.
 
     foreach (map {split qr{ \n }smx, $_} @args) {
 	s/ \s+ \z //smx;
@@ -4074,7 +4102,9 @@ sub _parse_retrieve_args {
 
     $opt->{sort} ||= 'catnum';
 
-    $opt->{sort} eq 'catnum' or $opt->{sort} eq 'epoch' or die <<"EOD";
+    $opt->{sort} eq 'catnum'
+	or $opt->{sort} eq 'epoch'
+	or die <<"EOD";
 Error - Illegal sort '$opt->{sort}'. You must specify 'catnum'
         (the default) or 'epoch'.
 EOD
