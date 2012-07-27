@@ -164,7 +164,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060_09';
+our $VERSION = '0.060_10';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -398,7 +398,7 @@ sub new {
 	$self->set (grep {defined $_} split '\s+', $ENV{SPACETRACK_OPT});
 
     $ENV{SPACETRACK_USER} and do {
-	my ($user, $pass) = split '/', $ENV{SPACETRACK_USER}, 2;
+	my ($user, $pass) = split qr{ [:/] }smx, $ENV{SPACETRACK_USER}, 2;
 	$self->set (username => $user, password => $pass);
     };
 
@@ -1901,6 +1901,7 @@ sub _retrieve_v2 {
 		'%04d-%02d-%02d %02d:%02d:%02d--%04d-%02d-%02d %02d:%02d:%02d',
 		@{ $opt->{_start_epoch} }[ 0 .. 5 ],
 		@{ $opt->{_end_epoch} }[ 0 .. 5 ];
+##	    $rest{EPOCH} =~ s/ \s+ 00:00:00 (?= \z | - ) //smxg;
 	} else {
 	    $rest{sublimit} = $opt->{last5} ? 5 : 1;
 	}
@@ -1930,11 +1931,24 @@ sub _retrieve_v2 {
 	all	=> '',
     );
 
+=begin comment
+
     # TODO correctly implement exclusion. Not sure this works.
+    #
+    # The intent of Space Track at the moment (July 27 2012) is to
+    # provide an OBJECT_TYPE column which is synthesized from the
+    # SATNAME in the expected manner (to 'PAYLOAD', 'ROCKET BODY',
+    # 'DEBRIS', or 'UNKNOWN'), but this does not yet seem to actually
+    # duplicate the results from version 1 of the interface.
+
     my %exclude_query = (
 	rocket	=> '<>r/b,<>akm,<>pkm',
 	debris	=> '<>deb,<>debris,<>coolant,<>shroud,<>westford needles',
     );
+
+=end comment
+
+=cut
 
     sub _convert_search_options_to_rest {
 	my ( $self, $opt ) = @_;
@@ -3274,7 +3288,7 @@ sub spacetrack_query_v2 {
     # since Space Track does not decode it.
     my $url = $self->_make_space_track_base_url( 2 ) . '/' .
 	join '/', map {
-	    URI::Escape::uri_escape( $_, '^A-Za-z0-9.,_~-' )
+	    URI::Escape::uri_escape( $_, '^A-Za-z0-9.,_~:-' )
 	} @args;
 
     if ( my $resp = $self->_dump_request(
@@ -4628,9 +4642,11 @@ passed explicitly to the new () method take precedence over both.
 =head2 SPACETRACK_USER
 
 If environment variable SPACETRACK_USER is defined at the time an
-Astro::SpaceTrack object is instantiated, the username and password
-will be initialized from it. The value of the environment variable
-should be the username followed by a slash ("/") and the password.
+Astro::SpaceTrack object is instantiated, the username and password will
+be initialized from it. The value of the environment variable should be
+the username and password, separated by either a slash (C<'/'>) or a
+colon (C<':'>). That is, either C<'yehudi/menuhin'> or
+C<'yehudi:menuhin'> are accepted.
 
 An explicit username and/or password passed to the new () method
 overrides the environment variable, as does any subsequently-set
