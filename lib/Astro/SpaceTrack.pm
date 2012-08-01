@@ -164,7 +164,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060_10';
+our $VERSION = '0.060_11';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -273,21 +273,54 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 ##	    url => 'http://spaceflight.nasa.gov/realdata/sightings/SSapplications/Post/JavaSSOP/orbit/SHUTTLE/SVPOST.html',
 	},
     },
-    spacetrack => {
-	md5 => {name => 'MD5 checksums', number => 0, special => 1},
-	full => {name => 'Full catalog', number => 1},
-	geosynchronous => {name => 'Geosynchronous satellites', number => 3},
-	navigation => {name => 'Navigation satellites', number => 5},
-	weather => {name => 'Weather satellites', number => 7},
-	iridium => {name => 'Iridium satellites', number => 9},
-	orbcomm => {name => 'OrbComm satellites', number => 11},
-	globalstar => {name => 'Globalstar satellites', number => 13},
-	intelsat => {name => 'Intelsat satellites', number => 15},
-	inmarsat => {name => 'Inmarsat satellites', number => 17},
-	amateur => {name => 'Amateur Radio satellites', number => 19},
-	visible => {name => 'Visible satellites', number => 21},
-	special => {name => 'Special satellites', number => 23},
-    },
+    spacetrack => [	# Numbered by space_track_version
+	undef,
+	{
+	    md5 => {name => 'MD5 checksums', number => 0, special => 1},
+	    full => {name => 'Full catalog', number => 1},
+	    geosynchronous => {
+		name => 'Geosynchronous satellites',
+		number => 3
+	    },
+	    navigation => {name => 'Navigation satellites', number => 5},
+	    weather => {name => 'Weather satellites', number => 7},
+	    iridium => {name => 'Iridium satellites', number => 9},
+	    orbcomm => {name => 'OrbComm satellites', number => 11},
+	    globalstar => {name => 'Globalstar satellites', number => 13},
+	    intelsat => {name => 'Intelsat satellites', number => 15},
+	    inmarsat => {name => 'Inmarsat satellites', number => 17},
+	    amateur => {name => 'Amateur Radio satellites', number => 19},
+	    visible => {name => 'Visible satellites', number => 21},
+	    special => {name => 'Special satellites', number => 23},
+	},
+	{
+#	    full => {
+#		name => 'Full catalog',
+#		number => 1,
+#		query => [],
+#	    },
+#	    geosynchronous => {
+#		name => 'Geosynchronous satellites',
+#		number => 3,
+#		# Note that the query equivalent to v1 is
+#		#   MEAN_MOTION 0.99--1.01
+#		#   ECCENTRICITY <0.01
+#		# but the query below is what the v2 interface actually
+#		# uses.
+#		query => [ qw{
+#		    PERIOD	1430--1450
+#		} ],
+#	    },
+#	    iridium => {
+#		name => 'Iridium satellites',
+#		number => 9,
+#		query => [ qw{
+#		    SATNAME	~~IRIDIUM
+#		    OBJECT_TYPE	PAYLOAD
+#		} ],
+#	    },
+	},
+    ],
 );
 
 my %mutator = (	# Mutators for the various attributes.
@@ -1635,11 +1668,14 @@ sub logout {
 =item $resp = $st->names (source)
 
 This method retrieves the names of the catalogs for the given source,
-either 'celestrak', 'spacetrack', or 'iridium_status', in the content of
-the given HTTP::Response object. In list context, you also get a
-reference to a list of two-element lists; each inner list contains the
-description and the catalog name, in that order (suitable for inserting
-into a Tk Optionmenu).
+either C<'celestrak'>, C<'iridium_status'>, C<'spaceflight'>, or
+C<'spacetrack'>, in the content of the given HTTP::Response object. In
+list context, you also get a reference to a list of two-element lists;
+each inner list contains the description and the catalog name, in that
+order (suitable for inserting into a Tk Optionmenu).
+
+In the case of C<'spacetrack'>, the return depends on the value of the
+C<space_track_version> attribute.
 
 No Space Track username and password are required to use this method,
 since all it is doing is returning data kept by this module.
@@ -1653,6 +1689,8 @@ sub names {
     $catalogs{$name} or return HTTP::Response (
 	    HTTP_NOT_FOUND, "Data source '$name' not found.");
     my $src = $catalogs{$name};
+    $name eq 'spacetrack'
+	and $src = $src->[ $self->getv( 'space_track_version' ) ];
     my @list;
     foreach my $cat (sort keys %$src) {
 	push @list, defined ($src->{$cat}{number}) ?
@@ -1782,34 +1820,19 @@ sub _retrieve_v1 {
     push @params, sort => $opt->{sort};
     push @params, descending => $opt->{descending} ? 'yes' : '';
 
-    @args = grep { m/ \A \d+ (?: - \d+)? \z /smx } @args;
+    @args = $self->_expand_oid_list( @args )
+	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
 
-    @args or return HTTP::Response->new (HTTP_PRECONDITION_FAILED, NO_CAT_ID);
     my $content = '';
     local $_ = undef;
     my $resp;
-    while (@args) {
-	my @batch;
-	my $ids = 0;
-	while (@args && $ids < RETRIEVAL_SIZE) {
-	    $ids++;
-	    my ($lo, $hi) = split '-', shift @args;
-	    $lo > 0 or defined $hi or next;
-	    defined $hi and do {
-		( $lo, $hi ) = $self->_check_range( $lo, $hi );
-		$ids += $hi - $lo;
-		$ids > RETRIEVAL_SIZE and do {
-		    my $mid = $hi - $ids + RETRIEVAL_SIZE;
-		    unshift @args, "@{[$mid + 1]}-$hi";
-		    $hi = $mid;
-		};
-		$lo = "$lo-$hi" if $hi > $lo;
-	    };
-	    push @batch, $lo;
-	}
-	next unless @batch;
+    while ( @args ) {
+	my @batch = splice @args, 0, RETRIEVAL_SIZE;
 	$resp = $self->_post ('perl/id_query.pl',
-	    ids => "@batch",
+	    ids => _stringify_oid_list( {
+		    separator	=> ' ',
+		    range_operator	=> '-',
+		}, @batch ),
 	    @params,
 	    ascii => 'yes',		# or ''
 	    _sessionid => '',
@@ -1853,29 +1876,55 @@ sub _retrieve_v2 {
 
     # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
 
-    @args
+    @args = $self->_expand_oid_list( @args )
 	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
+
     defined $rest->{format}
 	or $rest->{format} = 'tle';
     $rest->{orderby} = 'EPOCH desc';
 
-    my $resp = $self->spacetrack_query_v2(
-	basicspacedata	=> 'query',
-	class		=> 'tle',
-	NORAD_CAT_ID	=> join( ',', @args ),
-	map { $_ => $rest->{$_} } sort keys %{ $rest },
-    );
-    $resp->is_success()
-	or return $resp;
-    my $content = $resp->content;
-    $content =~ m/ function [.] key-exists /smxi
-	and $content = '';
-    $content eq '[]'
-	and $content = '';
+    my $content;
+    my $no_execute = $self->getv( 'dump_headers' ) & DUMP_NO_EXECUTE;
+    my $joiner = (
+	$rest->{format} eq 'json' || $no_execute
+    ) ? \&_append_data_json : \&_append_data_tle;
+
+    while ( @args ) {
+
+	my @batch = splice @args, 0, RETRIEVAL_SIZE;
+
+	my $resp = $self->spacetrack_query_v2(
+	    basicspacedata	=> 'query',
+	    class		=> 'tle',
+	    NORAD_CAT_ID	=> _stringify_oid_list( {
+		    separator	=> ',',
+		    range_operator	=> '--',
+		}, @batch,
+	    ),
+	    map { $_ => $rest->{$_} } sort keys %{ $rest },
+	);
+
+	$resp->is_success()
+	    or $resp->code() == HTTP_I_AM_A_TEAPOT
+	    or return $resp;
+
+	my $data = $resp->content();
+	$data =~ m/ function [.] key-exists /smxi
+	    and $data = '';
+	$joiner->( $content, $data );
+
+    }
+
     $content
+	and $content ne '[]'
 	or return HTTP::Response->new ( HTTP_NOT_FOUND, NO_RECORDS );
 
-    $resp->content( $content );
+    $no_execute
+	and return HTTP::Response->new(
+	    HTTP_I_AM_A_TEAPOT, undef, undef, $content );
+
+    my $resp = HTTP::Response->new( HTTP_OK, COPACETIC, undef,
+	$content );
     $self->_convert_content( $resp );
     $self->_add_pragmata( $resp,
 	'spacetrack-type' => 'orbit',
@@ -2016,6 +2065,23 @@ sub _retrieve_v2 {
 
 	@args = _parse_search_args( SPACE_TRACK_V2_OPTIONS, @args );
 	my $opt = shift @args;
+
+	if ( $pred eq 'NORAD_CAT_ID' ) {
+
+	    @args = $self->_expand_oid_list( @args )
+		or return HTTP::Response->new(
+		    HTTP_PRECONDITION_FAILED, NO_CAT_ID );
+
+	    @args = (
+		_stringify_oid_list( {
+			separator	=> ',',
+			range_operator	=> '--',
+		    },
+		    @args
+		)
+	    );
+
+	}
 
 	my $want_tle = exists $opt->{tle} ? $opt->{tle} : 1;
 
@@ -2686,28 +2752,30 @@ sub _search_oid_v1 {
 	],
 	@args );
     my $opt = shift @args;
+
     exists $opt->{tle} or $opt->{tle} = 1;
-    my $ids = join ' ', @args;
-    return $self->_search_generic ( \&_search_oid_generic, $opt, $ids );
+
+    @args = $self->_expand_oid_list( @args )
+	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
+
+    return $self->_search_generic( sub {
+	    my ( $self, $ids, $opt ) = @_;
+	    return $self->_post (
+		'perl/satcat_id_query.pl',
+		_submitted => 1,
+		_sessionid => '',
+		ids => $ids,
+		desc => ( $opt->{descending} ? 'yes' : '' ),
+		_submit => 'Submit',
+	    );
+	},
+	$opt, "@args" );
 }
 
 sub _search_oid_v2 {	## no critic (RequireArgUnpacking)
+    my ( $self, @args ) = @_;
     splice @_, 1, 0, NORAD_CAT_ID => sub { return @_ };
     goto &_search_rest;
-}
-
-sub _search_oid_generic {
-    my ( $self, $ids, $opt ) = @_;
-    $ids =~ s{ ( \d+ ) \s* - \s* ( \d+ ) }
-	{ scalar $self->_expand_range( $1, $2 ) }smxeg;
-    return $self->_post (
-	'perl/satcat_id_query.pl',
-	_submitted => 1,
-	_sessionid => '',
-	ids => $ids,
-	desc => ( $opt->{descending} ? 'yes' : '' ),
-	_submit => 'Submit',
-    );
 }
 
 sub _check_range {
@@ -2723,14 +2791,6 @@ EOD
     };
     return ( $lo, $hi );
 }
-
-sub _expand_range {
-    my ( $self, @args ) = @_;
-    my ( $lo, $hi ) = $self->_check_range( @args )
-	or return wantarray ? () : '';
-    return wantarray ? ( $lo .. $hi ) : join ' ', $lo .. $hi;
-}
-
 
 =for html <a name="set"></a>
 
@@ -2774,9 +2834,9 @@ sub set {	## no critic (ProhibitAmbiguousNames)
 
 This method implements a simple shell. Any public method name except
 'new' or 'shell' is a command, and its arguments if any are parameters.
-We use Text::ParseWords to parse the line, and blank lines or lines
-beginning with a hash mark ('#') are ignored. Input is via
-Term::ReadLine if that is available. If not, we do the best we can.
+We use L<Text::ParseWords|Text::ParseWords> to parse the line, and blank
+lines or lines beginning with a hash mark ('#') are ignored. Input is
+via Term::ReadLine if that is available. If not, we do the best we can.
 
 We also recognize 'bye' and 'exit' as commands, which terminate the
 method. In addition, 'show' is recognized as a synonym for 'get', and
@@ -2795,6 +2855,11 @@ on the line. For example,
 
 sends the "Special Interest Satellites" to file special.txt. Line
 terminations in the file should be appropriate to your OS.
+
+Redirections will not be recognized as such if quoted or escaped. That
+is, both C<< >foo >> and C<< >'foo' >> (without the double quotes) are
+redirections to file F<foo>, but both "C<< '>foo' >>" and C<< \>foo >>
+are arguments whose value is C<< >foo >>.
 
 This method can also be called as a subroutine - i.e. as
 
@@ -2853,11 +2918,30 @@ EOD
 	$buffer =~ s/ \s+ \z //smx;
 	next unless $buffer;
 	next if $buffer =~ m/ \A [#] /smx;
-	my @cmdarg = parse_line ('\s+', 0, $buffer);
+
+	# Break the buffer up into tokens, but leave quotes and escapes
+	# in place, so that (e.g.) '\>foo' is seen as an argument, not a
+	# redirection.
+
+	my @cmdarg = parse_line( '\s+', 1, $buffer );
+
+	# Pull off any redirections.
+
 	my $redir = '';
-	@cmdarg = map {m/ \A > /smx ? do {$redir = $_; ()} :
+	@cmdarg = map {
+	    m/ \A > /smx ? do {$redir = $_; ()} :
 	    $redir =~ m/ \A >+ \z /smx ? do {$redir .= $_; ()} :
-	    $_} @cmdarg;
+	    $_
+	} @cmdarg;
+
+	# Rerun everything through parse_line again, but with the $keep
+	# argument false. This should not create any more tokens, it
+	# should just un-quote and un-escape the data.
+
+	@cmdarg = map { parse_line( qr{ \s+ }, 0, $_ ) } @cmdarg;
+	$redir ne ''
+	    and ( $redir ) = parse_line ( qr{ \s+ }, 0, $redir );
+
 	$redir =~ s/ \A (>+) ~ /$1$ENV{HOME}/smx;
 	my $verb = lc shift @cmdarg;
 	last if $verb eq 'exit' || $verb eq 'bye';
@@ -2920,6 +3004,8 @@ EOD
 	    my $status = $rslt->status_line;
 	    chomp $status;
 	    warn $status, "\n";
+	    $rslt->code() == HTTP_I_AM_A_TEAPOT
+		and print { $out } $rslt->content(), "\n";
 	}
     }
     $interactive
@@ -3179,7 +3265,7 @@ sub _spacetrack_v1 {
     my ( $self, $catnum ) = @_;
     delete $self->{_pragmata};
     $catnum =~ m/ \D /smx and do {
-	my $info = $catalogs{spacetrack}{$catnum} or
+	my $info = $catalogs{spacetrack}[1]{$catnum} or
 	    return $self->_no_such_catalog (spacetrack => $catnum);
 	$catnum = $info->{number};
 	$self->{with_name} && $catnum++ unless $info->{special};
@@ -3243,9 +3329,86 @@ Requested file  doesn't exist");history.go(-1);
     return $resp;
 }
 
-sub _spacetrack_v2 {
-    # TODO figure out how to make this work.
-    croak 'Bulk data downloads not supported by REST API';
+{
+
+    my @catnum_to_name = (
+	undef,
+	[ full			=> 0 ],
+	[ full			=> 1 ],
+	[ geosynchronous	=> 0 ],
+	[ geosynchronous	=> 1 ],
+	undef,
+	undef,
+	undef,
+	undef,
+	[ iridium		=> 0 ],
+	[ iridium		=> 1 ],
+    );
+
+    sub _spacetrack_v2 {
+	my ( $self, $catalog ) = @_;
+
+	# TODO figure out how to make this work.
+	croak 'Bulk data downloads not supported by REST API';
+
+	# The following code works well enough, but is rather slow, and
+	# only covers those cases where there is a query that will fetch
+	# the data.
+	#
+	# There also may be a limit on how many bodies one can retrieve
+	# at a time.
+
+=begin comment
+
+	my ( $catname, $with_name ) = $catalog =~ m/ \D /smx ?
+	( $catalog, $self->getv( 'with_name' ) ) :
+	@{ $catnum_to_name[ $catalog ] || [] };
+
+	defined $catname
+	    and my $info = $catalogs{spacetrack}[2]{$catname}
+	    or return $self->_no_such_catalog( spacetrack => $catalog );
+
+	my $rslt = $self->spacetrack_query_v2(
+	    basicspacedata	=> 'query',
+	    class		=> 'satcat',
+	    CURRENT		=> 'Y',
+	    DECAY		=> 'null-val',
+	    predicates		=> 'NORAD_CAT_ID,SATNAME',
+	    format		=> 'json',
+	    @{ $info->{query} },
+	);
+
+	$rslt->is_success()
+	    or return $rslt;
+
+	my %body_name = map { $_->{NORAD_CAT_ID} => $_->{SATNAME} } @{
+	    JSON::from_json( $rslt->content() ) };
+
+	$rslt = $self->_retrieve_v2( { format => 'json' }, keys %body_name );
+	$rslt->is_success()
+	    or return $rslt;
+
+	my $content = '';
+	my $data = JSON::from_json( $rslt->content() );
+
+	foreach my $tle (
+	    sort { $a->{NORAD_CAT_ID} <=> $b->{NORAD_CAT_ID} } @{ $data }
+	) {
+	    $with_name
+		and $content .= "$body_name{$tle->{NORAD_CAT_ID}}\n";
+	    $content .= "$tle->{TLE_LINE1}\n$tle->{TLE_LINE2}\n";
+	}
+
+	$rslt->content( $content );
+	return $rslt;
+
+=end comment
+
+=cut
+
+	# https://beta.space-track.org/basicspacedata/query/class/satcat/DECAY/null-val/CURRENT/Y/orderby/NORAD_CAT_ID%20desc/predicates/INTLDES,SATNAME,NORAD_CAT_ID,COUNTRY,PERIOD,INCLINATION,APOGEE,PERIGEE,RCSVALUE,LAUNCH,COMMENT/format/html
+    }
+
 }
 
 =for html <a name="spacetrack_query_v2"></a>
@@ -3354,6 +3517,37 @@ sub _add_pragmata {
 	$self->{_pragmata}{$name} = $value;
 	$resp->push_header(pragma => "$name = $value");
     }
+    return;
+}
+
+# Subroutine _append_data_json() appends all subsequent arguments to its
+# first argument, which is assumed to be either undef or a JSON array.
+# Subsequent arguments are assumed to be either JSON arrays or JSON
+# hashes. It returns nothing. The first argument MUST NOT be something
+# unmodifiable.
+
+sub _append_data_json {
+    my ( undef, @arg ) = @_;
+    foreach ( @arg ) {
+	if ( m/ \A \s* [{] .* [}] \s* \z /smx ) {
+	    s/ [{] /[{/smx;
+	    s/ [}] (?= \s* \z ) /}]/smx;
+	}
+	if ( defined $_[0] ) {
+	    s/ [[] //smx;
+	    $_[0] =~ s/ []] (?= \s* \z ) /,/smx;
+	}
+	$_[0] .= $_;
+    }
+    return;
+}
+
+# Subroutine _append_data_tle() appends all subsequent arguments to its
+# first argument. It returns nothing. The first argument MUST NOT be
+# something unmodifiable.
+
+sub _append_data_tle {
+    $_[0] .= join '', @_[ 1 .. $#_ ];
     return;
 }
 
@@ -3566,6 +3760,32 @@ sub _dump_request {
 
     warn $yaml;
     return;
+}
+
+# my @oids = $self->_expand_oid_list( @args );
+#
+# This subroutine expands the input into a list of OIDs. Commas are
+# recognized as separating an argument into multiple specifications.
+# Dashes are recognized as range operators, which are expanded. The
+# result is returned.
+
+sub _expand_oid_list {
+    my ( $self, @args ) = @_;
+
+    my @rslt;
+    foreach my $arg ( map { split qr{ , | \s+ }smx, $_ } @args ) {
+	if ( my ( $lo, $hi ) = $arg =~
+	    m/ \A \s* ( \d+ ) \s* - \s* ( \d+ ) \s* \z /smx
+	) {
+	    ( $lo, $hi ) = $self->_check_range( $lo, $hi )
+		and push @rslt, $lo .. $hi;
+	} elsif ( $arg =~ m/ \A \s* ( \d+ ) \s* \z /smx ) {
+	    push @rslt, $1;
+	} else {
+	    # TODO -- ignore? die? what?
+	}
+    }
+    return @rslt;
 }
 
 # Parse an international launch id, and format it for a Space-Track REST
@@ -4387,6 +4607,64 @@ Error - Failed to open source file '$fn'.
         $!
 EOD
     return <$fh>;
+}
+
+# my $string = _stringify_oid_list( $opt, @oids );
+#
+# This subroutine sorts the @oids array, and stringifies it by
+# eliminating duplicates, combining any consecutive runs of OIDs into
+# ranges, and joining the result with commas. The string is returned.
+#
+# The $opt is a reference to a hash that specifies punctuation in the
+# stringified result. The keys used are
+#   separator -- The string used to separate OID specifications. The
+#       default is ','.
+#   range_operator -- The string used to specify a range. The default is
+#       '--'.
+#
+# Note that ranges containing only two OIDs (e.g. 5-6) will be expanded
+# as "5,6", not "5-6" (presuming $range_operator is '-').
+
+sub _stringify_oid_list {
+    my ( $opt, @args ) = @_;
+
+    my @rslt = ( -99 );	# Prime the pump
+
+    @args
+	or return @args;
+
+    my $separator = defined $opt->{separator} ? $opt->{separator} : ',';
+    my $range_operator = defined $opt->{range_operator} ?
+	$opt->{range_operator} : '--';
+
+    foreach my $arg ( sort { $a <=> $b } @args ) {
+	if ( 'ARRAY' eq ref $rslt[-1] ) {
+	    if ( $arg == $rslt[-1][1] + 1 ) {
+		$rslt[-1][1] = $arg;
+	    } else {
+		$arg > $rslt[-1][1]
+		    and push @rslt, $arg;
+	    }
+	} else {
+	    if ( $arg == $rslt[-1] + 1 ) {
+		$rslt[-1] = [ $rslt[-1], $arg ];
+	    } else {
+		$arg > $rslt[-1]
+		    and push @rslt, $arg;
+	    }
+	}
+    }
+
+    shift @rslt;	# Drop the pump priming.
+
+    return join( $separator,
+	map { ref $_ ?
+	    $_->[1] > $_->[0] + 1 ?
+		"$_->[0]$range_operator$_->[1]" :
+		@{ $_ } :
+	    $_
+	} @rslt
+    );
 }
 
 #	_trim replaces undefined arguments with '', trims all arguments
