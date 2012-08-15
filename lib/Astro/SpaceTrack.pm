@@ -61,7 +61,9 @@ it.
 The Space Track web site is in the throes of implementing a new REST
 API, to replace the old screen-scraping API. This API is currently in
 beta. This module implements the REST API to the extent possible, but
-should probably not be used for production code at this point.
+since the REST API is beta, the C<Astro::SpaceTrack> interface to it may
+have to change without notice, and it should probably not be used for
+production code at this point.
 
 This module will use either the old (version 1) API or the new (version
 2) API, depending on the value of the C<space_track_version> attribute,
@@ -91,21 +93,26 @@ stated otherwise.
 =over
 
 =item The retrieve() method (which retrieves TLEs for given OIDs) is
-incapable of returning the common name of the body. I am informed that
-there is already a feature request for this, but that it has not yet
-been prioritized. In the meantime, if you B<really> want common names in
-your TLE data, you can get them via the C<search_oid()> method.
+incapable of returning the common name of the body when using version 2
+of the Space Track interface. I am informed that there is already a
+feature request for this, but that it has not yet been prioritized. In
+the meantime, if you B<really> want common names in your TLE data, you
+can get them via the C<search_oid()> method.
 
 =item The C<spacetrack()> method (which returns predefined packages of
-TLEs) is unsupported, and throws an exception. I know of no work being
-done in this area.
+TLEs) is unsupported when using version 2 of the Space Track interface,
+and throws an exception. There is a place holder for this function on
+the Space Track web site, for whatever that is worth. Some of these data
+sets (e.g. Iridium satellites) could be simulated with canned queries;
+but when I tried it the queries seemed prohibitively slow.
 
-=item The C<-exclude> option to the C<search_*()> methods is not
-supported by version 2 of the interface. When version 2 is in use,
-C<Astro::SpaceTrack> filters the results of a search to simulate the
-functionality of version 1 of the interface. I am informed that there is
-a request for this functionality, but that it has not yet been
-prioritized.
+=item It appears that the idea of what kind of thing an orbiting body is
+(payload, rocket body, debris, etc) is being reworked for version 2 of
+the Space Track interface. This means that if you use the C<-exclude>
+option of the C<search_*()> methods you may get different results
+depending on the interface used. A known example is 'Westford Needles',
+which are debris under version 1 of the interface, but payload under
+version 2.
 
 =item The C<-sort> and C<-descending> retrieval options are ignored. The
 issue is that unless you do the equivalent of C<-sort=epoch -descending>
@@ -164,7 +171,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.060_12';
+our $VERSION = '0.061';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1743,19 +1750,19 @@ exception being thrown.
 
 The legal options are:
 
- descending
+ -descending
    specifies the data be returned in descending order.
- end_epoch date
+ -end_epoch date
    specifies the end epoch for the desired data.
- json
+ -json
    specifies the TLE be returned in JSON format
    (space_track_version == 2 only!)
- last5
+ -last5
    specifies the last 5 element sets be retrieved.
    Ignored if start_epoch or end_epoch specified.
- start_epoch date
+ -start_epoch date
    specifies the start epoch for the desired data.
- sort type
+ -sort type
    specifies how to sort the data. Legal types are
    'catnum' and 'epoch', with 'catnum' the default.
 
@@ -1980,24 +1987,17 @@ sub _retrieve_v2 {
 	all	=> '',
     );
 
-=begin comment
-
-    # TODO correctly implement exclusion. Not sure this works.
-    #
-    # The intent of Space Track at the moment (July 27 2012) is to
-    # provide an OBJECT_TYPE column which is synthesized from the
-    # SATNAME in the expected manner (to 'PAYLOAD', 'ROCKET BODY',
-    # 'DEBRIS', or 'UNKNOWN'), but this does not yet seem to actually
-    # duplicate the results from version 1 of the interface.
-
-    my %exclude_query = (
-	rocket	=> '<>r/b,<>akm,<>pkm',
-	debris	=> '<>deb,<>debris,<>coolant,<>shroud,<>westford needles',
+    my %exclude_map = (
+	rocket	=> 1 << 0,
+	debris	=> 1 << 1,
     );
 
-=end comment
-
-=cut
+    my @exclude_query = (
+	undef,
+	'PAYLOAD,DEBRIS,UNKNOWN,OTHER',
+	'PAYLOAD,ROCKET BODY,UNKNOWN,OTHER',
+	'PAYLOAD,UNKNOWN,OTHER',
+    );
 
     sub _convert_search_options_to_rest {
 	my ( $self, $opt ) = @_;
@@ -2010,30 +2010,16 @@ sub _retrieve_v2 {
 		and $rest{DECAY} = $query;
 	}
 
-	# TODO this may not be right at all, because this may not be the
-	# way selection works.
-
-=begin comment
-
-	if ( defined $opt->{exclude} ) {
-	    my @aggregate;
-	    foreach my $exclude ( @{ $opt->{exclude} } ) {
-		defined ( my $query = $exclude_query{$exclude} )
-		    or croak "Unknown exclusion '$exclude'";
-		push @aggregate, $query;
+	{
+	    my $inx = 0;
+	    foreach my $excl ( @{ $opt->{exclude} || [] } ) {
+		defined $exclude_map{$excl}
+		    or croak "Unknown excludion '$excl'";
+		$inx |= $exclude_map{$excl};
 	    }
-	    @aggregate
-		and croak 'REST interface does not support -exclude';
-	    @aggregate
-		and $rest{SATNAME} = join ',', @aggregate;
+	    defined $exclude_query[$inx]
+		and $rest{OBJECT_TYPE} = $exclude_query[$inx];
 	}
-
-=end comment
-
-=cut
-
-##	'status=s' => q{('onorbit', 'decayed', or 'all')},
-##	'exclude=s@' => q{('debris', 'rocket', or 'debris,rocket')},
 
 	return \%rest;
     }
@@ -2103,7 +2089,7 @@ sub _retrieve_v2 {
 
 	    my $data = JSON::decode_json( $rslt->content() );
 
-	    $self->_simulate_rest_exclude( $opt, $data );
+##	    $self->_simulate_rest_exclude( $opt, $data );
 
 	    push @found , @{ $data };
 
@@ -2291,20 +2277,20 @@ result in an exception being thrown.
 In addition to the options available for L</retrieve>, the following
 options may be specified:
 
- exclude
+ -exclude
    specifies the types of bodies to exclude. The
    value is one or more of 'debris' or 'rocket'.
    If you specify both as command-style options,
    you may either specify the option more than once,
    or specify the values comma-separated.
- rcs
+ -rcs
    specifies that the radar cross-section returned by
    the search is to be appended to the name, in the form
    --rcs radar_cross_section. If the with_name attribute
    is false, the radar cross-section will be inserted as
    the name. Historical rcs data appear NOT to be
    available.
- status
+ -status
    specifies the desired status of the returned body
    (or bodies). Must be 'onorbit', 'decayed', or 'all'.
    The default is 'all'. Note that this option
@@ -2312,7 +2298,7 @@ options may be specified:
    you can not combine it with the retrieve() date
    options to find bodies onorbit as of a given date
    in the past.
- tle
+ -tle
    specifies that you want TLE data retrieved for all
    bodies that satisfy the search criteria. This is
    true by default, but may be negated by specifying
@@ -2332,6 +2318,20 @@ Examples:
  search_date ({exclude => 'debris,rocket'}, # INVALID!
     '2005-12-25');
  search_date ( '-notle', '2005-12-25' );
+
+The effect of the C<-exclude> option differs depending on which version
+of the Space Track interface is in use. Under version 1, it maps to the
+'Exclude' check box on the relevant search form. Under version 2, it
+maps to the C<OBJECT_TYPE> predicate, which is one of the values
+C<'PAYLOAD'>, C<'ROCKET BODY'>, C<'DEBRIS'>, C<'UNKNOWN'>, or
+C<'OTHER'>, and is implemented by selecting all values other than the
+ones specifically excluded.
+
+In at least one case, the two interfaces classify bodies differently.
+The site legend for the version 1 site says Westford Needles are debris,
+and in fact searches that exclude debris do not return them. But their
+C<OBJECT_TYPE> under the version 2 interface is C<'PAYLOAD'>, and I am
+informed that this is intentional.
 
 This method implicitly calls the C<login()> method if the session cookie
 is missing or expired. If C<login()> fails, you will get the
@@ -3331,6 +3331,8 @@ Requested file  doesn't exist");history.go(-1);
 
 {
 
+=begin comment
+
     my @catnum_to_name = (
 	undef,
 	[ full			=> 0 ],
@@ -3344,6 +3346,10 @@ Requested file  doesn't exist");history.go(-1);
 	[ iridium		=> 0 ],
 	[ iridium		=> 1 ],
     );
+
+=end comment
+
+=cut
 
     sub _spacetrack_v2 {
 	my ( $self, $catalog ) = @_;
@@ -4467,10 +4473,10 @@ sub _search_generic {
     my $resp;
     $resp = $self->_search_generic_tabulate( \%id, $poster, $opt, @args )
 	and return $resp;
-    delete $id{0};	# Not interested in headings.
 
     exists $opt->{tle} or $opt->{tle} = 1;
     if ( $opt->{tle} ) {
+	delete $id{0};	# Not interested in headings.
 	my $with_name = $self->getv( 'with_name' );
 	$resp = $self->_retrieve_v1 ($opt, sort {$a <=> $b} keys %id);
 	if ( $opt->{rcs} ) {
@@ -4564,6 +4570,14 @@ sub _search_generic_tabulate {
     return;
 }
 
+=begin comment
+
+# This code was used to emulate the Space Track v1 classification of
+# bodies under v2, for the purposes of the -exclude search option. It is
+# currently implemented in terms of the OBJECT_TYPE field, but the code
+# is retained (commented-out) in case there turns out to be a crying
+# need to emulate v1 in this area.
+
 {
     my %exclude_names = (
 	rocket	=> [ map { quotemeta $_ } qw{ r/b akm pkm } ],
@@ -4590,6 +4604,10 @@ sub _search_generic_tabulate {
 	return;
     }
 }
+
+=end comment
+
+=cut
 
 #	_source takes a filename, and returns the contents of the file
 #	as a list. It dies if anything goes wrong.
