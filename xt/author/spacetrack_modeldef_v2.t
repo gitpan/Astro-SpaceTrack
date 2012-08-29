@@ -13,9 +13,13 @@ $ENV{SPACETRACK_USER}
     or plan skip_all => 'Environment variable SPACETRACK_USER not defined';
 
 my $st = Astro::SpaceTrack->new();
+my $rslt = $st->spacetrack_query_v2();
+$rslt->is_success()
+    or plan skip_all => 'Space Track inaccessable: ' . $rslt->status_line();
+
 my $json = JSON->new()->pretty()->canonical()->utf8();
 
-my $rslt = $st->spacetrack_query_v2( qw{
+$rslt = $st->spacetrack_query_v2( qw{
     basicspacedata modeldef class satcat
     } );
 
@@ -259,7 +263,7 @@ if ( $rslt->is_success() ) {
          "Field" : "INTLDES",
          "Key" : "",
          "Null" : "NO",
-         "Type" : "varbinary(11)"
+         "Type" : "varchar(8)"
       },
       {
          "Default" : "0000-00-00 00:00:00",
@@ -419,7 +423,7 @@ sub dump_json {
     my ( $fn, $data ) = @_;
     open my $fh, '>', $fn
 	or die "Unable to open $fn for output: $!\n";
-    print $fh, $json->encode( $data );
+    print { $fh } $json->encode( $data );
     close $fh;
     return;
 }

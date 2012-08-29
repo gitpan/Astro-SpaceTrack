@@ -63,16 +63,24 @@ provided by the spacetrack() method were deprecated, and would probably
 be eliminated in October 2012. Their rationale is that the new REST
 interface makes prepackaged data no longer necessary.
 
-I have not yet decided what to do about this, but if I do nothing, the
-spacetrack() method will break when the functionality is retracted. I
-have experimented with REST queries, but find them very slow. Three bulk
-downloads of the Iridium constellation took 1.5, 26.2, and 1.3 seconds.
-Acquiring the data from the REST database three times took 599.1, 180.8,
-and 52.2 seconds. Each REST data acquisition used three queries: the
-first to query the satcat data for objects named 'Iridium something',
-and the second and third to acquire the TLE data for the objects. The
-TLE data was broken into two queries because I have found that large
-queries result in HTTP server errors (code 500).
+I have not yet decided what to do about this, though I am leaning toward
+removing the functionality. Many of the bulk data sets can be trivially
+reproduced using C<search_name()>. The rest I have no way to implement
+other than as a predefined list of OIDs, and I have no real way to keep
+that list up to date.
+
+If I do nothing, the spacetrack() method will break when the
+functionality is retracted.
+
+I have experimented with REST queries, but find them very slow. Three
+bulk downloads of the Iridium constellation took 1.5, 26.2, and 1.3
+seconds.  Acquiring the data from the REST database three times (using
+the equivalent of C<search_name( 'iridium' )> took 599.1, 180.8, and
+52.2 seconds. Each REST data acquisition used three queries: the first
+to query the satcat data for objects named 'Iridium something', and the
+second and third to acquire the TLE data for the objects. The TLE data
+was broken into two queries because I have found that large queries
+result in HTTP server errors (code 500).
 
 =head1 SPACE TRACK REST API
 
@@ -193,7 +201,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.062';
+our $VERSION = '0.063';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -236,6 +244,7 @@ use constant NO_RECORDS => 'No records found.';
 
 use constant SESSION_PATH => '/';
 
+use constant DEFAULT_SPACE_TRACK_REST_SEARCH_CLASS => 'satcat';
 use constant DEFAULT_SPACE_TRACK_VERSION => 1;
 
 use constant DUMP_NONE => 0;		# No dump
@@ -305,7 +314,7 @@ my %catalogs = (	# Catalog names (and other info) for each source.
     },
     spacetrack => [	# Numbered by space_track_version
 	undef,
-	{
+	{	# Interface version 1 (Original)
 	    md5 => {name => 'MD5 checksums', number => 0, special => 1},
 	    full => {name => 'Full catalog', number => 1},
 	    geosynchronous => {
@@ -323,11 +332,11 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    visible => {name => 'Visible satellites', number => 21},
 	    special => {name => 'Special satellites', number => 23},
 	},
-	{
+	{	# Interface version 2 (REST)
 #	    full => {
 #		name => 'Full catalog',
 #		number => 1,
-#		query => [],
+#		query => [ [] ],
 #	    },
 #	    geosynchronous => {
 #		name => 'Geosynchronous satellites',
@@ -337,17 +346,66 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 #		#   ECCENTRICITY <0.01
 #		# but the query below is what the v2 interface actually
 #		# uses.
-#		query => [ qw{
-#		    PERIOD	1430--1450
-#		} ],
+#		query => [
+#		    [ qw{
+#			PERIOD	1430--1450
+#			OBJECT_TYPE	PAYLOAD
+#		    } ],
+#		],
 #	    },
 #	    iridium => {
 #		name => 'Iridium satellites',
 #		number => 9,
-#		query => [ qw{
-#		    SATNAME	~~IRIDIUM
-#		    OBJECT_TYPE	PAYLOAD
-#		} ],
+#		query => [
+#		    [ qw{
+#			SATNAME	~~IRIDIUM
+#			OBJECT_TYPE	PAYLOAD
+#		    } ],
+#		],
+#	    },
+#	    orbcomm => {
+#		name => 'OrbComm satellites',
+#		number => 11,
+#		query => [
+#		    [ qw{
+#			SATNAME	~~ORBCOMM
+#			OBJECT_TYPE PAYLOAD
+#		    } ],
+#		    [ qw{
+#			SATNAME ~~VESSELSAT
+#			OBJECT_TYPE	PAYLOAD
+#		    } ],
+#		],
+#	    },
+#	    globalstar => {
+#		name => 'Globalstar satellites',
+#		number => 13,
+#		query => [
+#		    [ qw{
+#			SATNAME	~~GLOBALSTAR
+#			OBJECT_TYPE PAYLOAD
+#		    } ],
+#		],
+#	    },
+#	    intelsat => {
+#		name => 'Intelsat satellites',
+#		number => 15,
+#		query => [
+#		    [ qw{
+#			SATNAME	~~INTELSAT
+#			OBJECT_TYPE PAYLOAD
+#		    } ],
+#		],
+#	    },
+#	    inmarsat => {
+#		name => 'Inmarsat satellites',
+#		number => 17,
+#		query => [
+#		    [ qw{
+#			SATNAME	~~INMARSAT
+#			OBJECT_TYPE PAYLOAD
+#		    } ],
+#		],
 #	    },
 	},
     ],
@@ -436,7 +494,11 @@ sub new {
 		session_cookie		=> undef,
 	    },
 	    {	# Interface version 2
-##		cookie_expires		=> 0,
+		# This interface does not seem to put an expiration time
+		# on the cookie. But the docs say it's only good for a
+		# couple hours, so we need this so we can fudge
+		# something in when the time comes.
+		cookie_expires		=> 0,
 		cookie_name		=> 'chocolatechip',
 		domain_space_track	=> 'beta.space-track.org',
 		session_cookie		=> undef,
@@ -2112,9 +2174,13 @@ sub _retrieve_v2 {
 
 	my $rest_args = $self->_convert_search_options_to_rest( $opt );
 
+	my $class = defined $rest_args->{class} ?
+	    $rest_args->{class} :
+	    DEFAULT_SPACE_TRACK_REST_SEARCH_CLASS;
+
 	my @found;
 
-	foreach my $search_for ( map { $xfrm->( $_ ) } @args ) {
+	foreach my $search_for ( map { $xfrm->( $_, $class ) } @args ) {
 
 	    my $rslt;
 	    {
@@ -2260,7 +2326,7 @@ sub __search_rest_raw {
 	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
 
     exists $args{class}
-	or $args{class} = 'satcat';
+	or $args{class} = DEFAULT_SPACE_TRACK_REST_SEARCH_CLASS;
     $args{class} ne 'satcat'
 	or exists $args{CURRENT}
 	or $args{CURRENT} = 'Y';
@@ -3413,21 +3479,30 @@ Requested file  doesn't exist");history.go(-1);
 	    and my $info = $catalogs{spacetrack}[2]{$catname}
 	    or return $self->_no_such_catalog( spacetrack => $catalog );
 
-	my $rslt = $self->spacetrack_query_v2(
-	    basicspacedata	=> 'query',
-	    class		=> 'satcat',
-	    CURRENT		=> 'Y',
-	    DECAY		=> 'null-val',
-	    predicates		=> 'NORAD_CAT_ID,SATNAME',
-	    format		=> 'json',
-	    @{ $info->{query} },
-	);
+	my %body_name;
 
-	$rslt->is_success()
-	    or return $rslt;
+	foreach my $query ( @{ $info->{query} } ) {
 
-	my %body_name = map { $_->{NORAD_CAT_ID} => $_->{SATNAME} } @{
-	    JSON::from_json( $rslt->content() ) };
+	    my $rslt = $self->spacetrack_query_v2(
+		basicspacedata	=> 'query',
+		class		=> 'satcat',
+		CURRENT		=> 'Y',
+		DECAY		=> 'null-val',
+		predicates		=> 'NORAD_CAT_ID,SATNAME',
+		format		=> 'json',
+		@{ $query },
+	    );
+
+	    $rslt->is_success()
+		or return $rslt;
+
+	    my $data = JSON::from_json( $rslt->content() );
+
+	    foreach my $body ( @{ JSON::from_json( $rslt->content() ) } ) {
+		$body_name{ $body->{NORAD_CAT_ID} } = $body->{SATNAME};
+	    }
+
+	}
 
 	$rslt = $self->_retrieve_v2( { format => 'json' }, keys %body_name );
 	$rslt->is_success()
@@ -3623,6 +3698,13 @@ sub _record_cookie_generic {
 	    ( $cookie, $expires ) = @_[2, 8];
 	    return;
 	} );
+
+    # I don't get an expiration time back from the version 2 interface.
+    # But the docs say the cookie is only good for about two hours, so
+    # to be on the safe side I fudge in an hour.
+    $version == 2
+	and not defined $expires
+	and $expires = time + 3600;
 
     if ( defined $cookie ) {
 	$interface_info->{session_cookie} = $cookie;
@@ -3845,19 +3927,30 @@ sub _expand_oid_list {
     return @rslt;
 }
 
+# The following are data transform routines for _search_rest().
+# The arguments are the datum and the class for which it is being
+# formatted.
+
 # Parse an international launch id, and format it for a Space-Track REST
 # query. The parsing is done by _parse_international_id(). The
 # formatting prefixes the 'contains' wildcard '~~' unless year, sequence
 # and part are all present.
 
 sub _format_international_id_rest {
-    my ( $intl_id ) = @_;
+    my ( $intl_id, $class ) = @_;
     my @parts = _parse_international_id( $intl_id );
+    my $yt;
+    if ( 'tle' eq $class ) {
+	$parts[0] %= 100;
+	$yt = '%02d';
+    } else {
+	$yt = '%04d-';
+    }
     @parts >= 3
-	and return sprintf '%04d-%03d%s', @parts;
+	and return sprintf "$yt%03d%s", @parts;
     @parts >= 2
-	and return sprintf '~~%04d-%03d', @parts;
-    return sprintf '~~%04d', $parts[0];
+	and return sprintf "~~$yt%03d", @parts;
+    return sprintf "~~$yt", $parts[0];
 }
 
 # Parse a launch date, and format it for a Space-Track REST query. The
@@ -3865,7 +3958,7 @@ sub _format_international_id_rest {
 # 'contains' wildcard '~~' unless year, month, and day are all present.
 
 sub _format_launch_date_rest {
-    my ( $date ) = @_;
+    my ( $date, $class ) = @_;
     my @parts = _parse_launch_date( $date )
 	or return;
     @parts >= 3
