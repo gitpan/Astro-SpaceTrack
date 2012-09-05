@@ -24,6 +24,10 @@ or
  SpaceTrack> celestrak visual >visual.txt
  SpaceTrack> exit
 
+In practice, it is probably not useful to retrieve data from any source
+more often than once every four hours, and in fact daily usually
+suffices.
+
 =head1 LEGAL NOTICE
 
 The following two paragraphs are quoted from the Space Track web site.
@@ -63,24 +67,21 @@ provided by the spacetrack() method were deprecated, and would probably
 be eliminated in October 2012. Their rationale is that the new REST
 interface makes prepackaged data no longer necessary.
 
-I have not yet decided what to do about this, though I am leaning toward
-removing the functionality. Many of the bulk data sets can be trivially
-reproduced using C<search_name()>. The rest I have no way to implement
-other than as a predefined list of OIDs, and I have no real way to keep
-that list up to date.
+What I have decided to do about this is to replicate the bulk data
+catalogs with REST queries, to the extent possible. Catalogs which can
+only be implemented using OID lists will not be reproduced under the
+REST interface, since I have no way to maintain the OID list.
 
-If I do nothing, the spacetrack() method will break when the
-functionality is retracted.
+I decided to try to replicate what I could because of recent
+improvements in the performance of REST class C<'tle'> (I write this
+September 3 2012), as well as the provision of a source of TLE data
+(REST class C<'tle_current'>) groomed and optimized for the retrieval of
+current data.
 
-I have experimented with REST queries, but find them very slow. Three
-bulk downloads of the Iridium constellation took 1.5, 26.2, and 1.3
-seconds.  Acquiring the data from the REST database three times (using
-the equivalent of C<search_name( 'iridium' )> took 599.1, 180.8, and
-52.2 seconds. Each REST data acquisition used three queries: the first
-to query the satcat data for objects named 'Iridium something', and the
-second and third to acquire the TLE data for the objects. The TLE data
-was broken into two queries because I have found that large queries
-result in HTTP server errors (code 500).
+See the documentation for the C<spacetrack()> method for a list of what
+is and is not included, and
+L<Astro::SpaceTrack::BulkData|Astro::SpaceTrack::BulkData> for the gory
+details.
 
 =head1 SPACE TRACK REST API
 
@@ -112,7 +113,7 @@ exception as soon after the decommissioning of the old web site as I can
 manage.
 
 Version 2 of the interface differs from version 1 in the following ways
-that are known to me at this time. All are due to limitations in the
+that are known to me at this time. All are due to differences in the
 functionality provided by version 2 of the interface, unless explicitly
 stated otherwise.
 
@@ -130,11 +131,11 @@ C<with_name> attribute is true. This hack will be retracted when (and
 if) the REST interface becomes capable of returning NASA-format TLEs.
 
 =item The C<spacetrack()> method (which returns predefined packages of
-TLEs) is unsupported when using version 2 of the Space Track interface,
-and throws an exception. There is a place holder for this function on
-the Space Track web site, for whatever that is worth. Some of these data
-sets (e.g. Iridium satellites) could be simulated with canned queries;
-but when I tried it the queries seemed prohibitively slow.
+TLEs) is implemented by REST queries, and those bulk data packages which
+are not reasonably implemented by REST queries are simply not available.
+See
+L<DEPRECATION NOTICE: SPACE TRACK BULK DATA|/DEPRECATION NOTICE: SPACE TRACK BULK DATA>
+above for details.
 
 =item It appears that the idea of what kind of thing an orbiting body is
 (payload, rocket body, debris, etc) is being reworked for version 2 of
@@ -143,6 +144,22 @@ option of the C<search_*()> methods you may get different results
 depending on the interface used. A known example is 'Westford Needles',
 which are debris under version 1 of the interface, but payload under
 version 2.
+
+=item The C<-status> search option defaults to 'onorbit' under version 2
+of the interface. The default under version 1 is still 'all'. This
+change was made because I believe that is what the user generally wants,
+and because the database underlying version 2 of the interface is
+optimized for this sort of query (see below). Basically, I believe that
+if you want a slow query you should have to ask for one specifically.
+
+=item Version 2 of the interface has two separate sources of TLE data.
+The C<tle_current> source is optimized for speed, but contains only
+current data. The C<tle> source contains all TLEs back to Sputnik, but
+is slower. The high-level interfaces attempt to select the correct
+source based on the options given them. Options C<-start_epoch>,
+C<-end_epoch> and C<-since_file> cause the C<tle> source do be used, as
+does any value for C<-status> other than C<-status=onorbit>. Otherwise,
+the C<tle_current> source is used.
 
 =item The C<-sort> and C<-descending> retrieval options are ignored. The
 issue is that unless you do the equivalent of C<-sort=epoch -descending>
@@ -171,9 +188,6 @@ Other methods (amsat(), spaceflight() ...) have been added to access
 other repositories of orbital data, and in general these do not require
 a Space Track username and password.
 
-Beginning with version 0.017, there is provision for retrieval of
-historical data.
-
 Nothing is exported by default, but the shell method/subroutine
 and the BODY_STATUS constants (see L</iridium_status>) can be
 exported if you so desire.
@@ -201,7 +215,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.063';
+our $VERSION = '0.064';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -256,8 +270,17 @@ use constant DUMP_HEADERS => 0x10;	# Dump headers.
 use constant DUMP_CONTENT => 0x20;	# Dump content
 
 use constant SPACE_TRACK_V2_OPTIONS => [
+    'since_file=i'
+    		=> '(Return only results added after the given file number)',
     'json!'	=> '(Return TLEs in JSON format)',
 ];
+
+# TODO get rid of this hack once the version 1 interface is retired. The
+# reason for the hack is that I want to have the default status to be
+# 'onorbit' under the REST interface, but do not want to change the
+# default under the version 1 interface.
+
+our $DEFAULT_SPACE_TRACK_STATUS = 'all';
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -333,80 +356,87 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    special => {name => 'Special satellites', number => 23},
 	},
 	{	# Interface version 2 (REST)
-#	    full => {
-#		name => 'Full catalog',
-#		number => 1,
-#		query => [ [] ],
-#	    },
-#	    geosynchronous => {
-#		name => 'Geosynchronous satellites',
-#		number => 3,
-#		# Note that the query equivalent to v1 is
-#		#   MEAN_MOTION 0.99--1.01
-#		#   ECCENTRICITY <0.01
-#		# but the query below is what the v2 interface actually
-#		# uses.
-#		query => [
-#		    [ qw{
-#			PERIOD	1430--1450
-#			OBJECT_TYPE	PAYLOAD
-#		    } ],
-#		],
-#	    },
-#	    iridium => {
-#		name => 'Iridium satellites',
-#		number => 9,
-#		query => [
-#		    [ qw{
-#			SATNAME	~~IRIDIUM
-#			OBJECT_TYPE	PAYLOAD
-#		    } ],
-#		],
-#	    },
-#	    orbcomm => {
-#		name => 'OrbComm satellites',
-#		number => 11,
-#		query => [
-#		    [ qw{
-#			SATNAME	~~ORBCOMM
-#			OBJECT_TYPE PAYLOAD
-#		    } ],
-#		    [ qw{
-#			SATNAME ~~VESSELSAT
-#			OBJECT_TYPE	PAYLOAD
-#		    } ],
-#		],
-#	    },
-#	    globalstar => {
-#		name => 'Globalstar satellites',
-#		number => 13,
-#		query => [
-#		    [ qw{
-#			SATNAME	~~GLOBALSTAR
-#			OBJECT_TYPE PAYLOAD
-#		    } ],
-#		],
-#	    },
-#	    intelsat => {
-#		name => 'Intelsat satellites',
-#		number => 15,
-#		query => [
-#		    [ qw{
-#			SATNAME	~~INTELSAT
-#			OBJECT_TYPE PAYLOAD
-#		    } ],
-#		],
-#	    },
-#	    inmarsat => {
-#		name => 'Inmarsat satellites',
-#		number => 17,
-#		query => [
-#		    [ qw{
-#			SATNAME	~~INMARSAT
-#			OBJECT_TYPE PAYLOAD
-#		    } ],
-#		],
-#	    },
+	    full => {
+		name	=> 'Full catalog',
+#		number	=> 1,
+		satcat	=> {},
+		no_name	=> {},
+	    },
+	    payloads	=> {
+		name	=> 'All payloads',
+		satcat	=> {
+		    OBJECT_TYPE	=> 'PAYLOAD',
+		},
+	    },
+	    geosynchronous => {
+		name	=> 'Geosynchronous satellites',
+#		number	=> 3,
+		# Note that the v2 interface specimen query is
+		#   PERIOD 1430--1450.
+		# The v1 definition is
+		#   MEAN_MOTION 0.99--1.01
+		#   ECCENTRICITY <0.01
+		# but none of these is available in class 'satcat'.
+		no_name	=> {
+		    ECCENTRICITY	=> '<0.01',
+		    MEAN_MOTION		=> '0.99--1.01',
+		},
+		satcat	=> {
+		    # The v1 data set includes debris and rocket bodies
+#		    OBJECT_TYPE		=> 'PAYLOAD',
+		    # The below is equivalent to the v1 mean motion.
+		    PERIOD		=> '1425.6--1454.4',
+		},
+		tle	=> {	# Further restrictions on tle query
+		    ECCENTRICITY	=> '<0.01',
+		},
+	    },
+	    iridium => {
+		name	=> 'Iridium satellites',
+#		number	=> 9,
+		satcat	=> {
+		    OBJECT_TYPE	=> 'PAYLOAD',
+		    SATNAME	=> '~~IRIDIUM',
+		},
+	    },
+	    orbcomm	=> {
+		name	=> 'OrbComm satellites',
+#		number	=> 11,
+		satcat	=> [
+		    {
+			OBJECT_TYPE	=> 'PAYLOAD',
+			SATNAME		=> '~~ORBCOMM',
+		    },
+		    {
+			OBJECT_TYPE	=> 'PAYLOAD',
+			SATNAME		=> '~~VESSELSAT',
+		    },
+		],
+	    },
+	    globalstar => {
+		name	=> 'Globalstar satellites',
+#		number	=> 13,
+		satcat	=> {
+		    OBJECT_TYPE => 'PAYLOAD',
+		    SATNAME	=> '~~GLOBALSTAR',
+		},
+	    },
+	    intelsat => {
+		name	=> 'Intelsat satellites',
+#		number	=> 15,
+		satcat	=> {
+		    OBJECT_TYPE => 'PAYLOAD',
+		    SATNAME	=> '~~INTELSAT',
+		},
+	    },
+	    inmarsat => {
+		name	=> 'Inmarsat satellites',
+#		number	=> 17,
+		satcat	=> {
+		    OBJECT_TYPE => 'PAYLOAD',
+		    SATNAME	=> '~~INMARSAT',
+		},
+	    },
 	},
     ],
 );
@@ -1186,7 +1216,7 @@ sub get {
     my ( $self, $name ) = @_;
     delete $self->{_pragmata};
     my $value = $self->getv( $name );
-    my $resp = HTTP::Response->new( HTTP_OK, undef, undef, $value );
+    my $resp = HTTP::Response->new( HTTP_OK, COPACETIC, undef, $value );
     $self->_add_pragmata( $resp,
 	'spacetrack-type' => 'get',
     );
@@ -1863,6 +1893,10 @@ The legal options are:
    Ignored if start_epoch or end_epoch specified.
  -start_epoch date
    specifies the start epoch for the desired data.
+ -since_file number
+   specifies that only data since the given Space Track
+   file number be retrieved (space_track_version == 2
+   only!)
  -sort type
    specifies how to sort the data. Legal types are
    'catnum' and 'epoch', with 'catnum' the default.
@@ -2000,16 +2034,15 @@ sub _retrieve_v2 {
     while ( @args ) {
 
 	my @batch = splice @args, 0, RETRIEVAL_SIZE;
+	$rest->{NORAD_CAT_ID} = _stringify_oid_list( {
+		separator	=> ',',
+		range_operator	=> '--',
+	    }, @batch );
 
 	my $resp = $self->spacetrack_query_v2(
 	    basicspacedata	=> 'query',
-	    class		=> 'tle',
-	    NORAD_CAT_ID	=> _stringify_oid_list( {
-		    separator	=> ',',
-		    range_operator	=> '--',
-		}, @batch,
-	    ),
-	    map { $_ => $rest->{$_} } sort keys %{ $rest },
+	    map { $_ => $rest->{$_} } _sort_rest_arguments( keys %{
+		$rest } )
 	);
 
 	$resp->is_success()
@@ -2051,7 +2084,8 @@ sub _retrieve_v2 {
 
     sub _convert_retrieve_options_to_rest {
 	my ( $self, $opt ) = @_;
-	my %rest;
+
+	my %rest = ( class	=> 'tle_latest' );
 
 	if ( $opt->{start_epoch} || $opt->{end_epoch} ) {
 	    $rest{EPOCH} = sprintf
@@ -2059,6 +2093,7 @@ sub _retrieve_v2 {
 		@{ $opt->{_start_epoch} }[ 0 .. 5 ],
 		@{ $opt->{_end_epoch} }[ 0 .. 5 ];
 ##	    $rest{EPOCH} =~ s/ \s+ 00:00:00 (?= \z | - ) //smxg;
+	    $rest{class} = 'tle';
 	} else {
 	    $rest{sublimit} = $opt->{last5} ? 5 : 1;
 	}
@@ -2070,9 +2105,28 @@ sub _retrieve_v2 {
 	$opt->{json}
 	    and $rest{format} = 'json';
 
-	foreach my $name ( qw{ class format } ) {
+	if ( $opt->{since_file} ) {
+	    $rest{FILE} = ">$opt->{since_file}";
+	    $rest{class} = 'tle';
+	}
+
+	if ( $opt->{status} && $opt->{status} ne 'onorbit' ) {
+	    $rest{class} = 'tle';
+	}
+
+	foreach my $name (
+	    qw{ class format },
+	    qw{ ECCENTRICITY FILE MEAN_MOTION },
+	) {
 	    defined $opt->{$name}
 		and $rest{$name} = $opt->{$name};
+	}
+
+	if ( $rest{class} eq 'tle_latest' ) {
+	    if ( defined $rest{sublimit} && $rest{sublimit} <= 5 ) {
+		my $limit = delete $rest{sublimit};
+		$rest{ORDINAL} = $limit > 1 ? "1--$limit" : $limit;
+	    }
 	}
 
 	return \%rest;
@@ -2150,7 +2204,10 @@ sub _retrieve_v2 {
 	my ( $self, $pred, $xfrm, @args ) = @_;
 	delete $self->{_pragmata};
 
-	@args = _parse_search_args( SPACE_TRACK_V2_OPTIONS, @args );
+	{
+	    local $DEFAULT_SPACE_TRACK_STATUS = 'onorbit';
+	    @args = _parse_search_args( SPACE_TRACK_V2_OPTIONS, @args );
+	}
 	my $opt = shift @args;
 
 	if ( $pred eq 'NORAD_CAT_ID' ) {
@@ -2207,7 +2264,7 @@ sub _retrieve_v2 {
 	    my $with_name = $self->{with_name};
 
 	    $opt->{format} = 'json';
-	    $rest_args = $self->_convert_retrieve_options_to_rest( $opt );
+##	    $rest_args = $self->_convert_retrieve_options_to_rest( $opt );
 
 	    {
 		local $self->{pretty} = 0;
@@ -2231,8 +2288,10 @@ sub _retrieve_v2 {
 		} else {
 		    my @line_0;
 		    $with_name
+			and defined $info->{SATNAME}
 			and push @line_0, $info->{SATNAME};
 		    $opt->{rcs}
+			and defined $info->{RCSVALUE}
 			and push @line_0, "--rcs $info->{RCSVALUE}";
 		    @line_0
 			and $content .= join( ' ', @line_0 ) . "\n";
@@ -2341,7 +2400,7 @@ sub __search_rest_raw {
 
     my $resp = $self->spacetrack_query_v2(
 	basicspacedata	=> 'query',
-	map { $_ => $args{$_} } sort keys %args,
+	map { $_ => $args{$_} } _sort_rest_arguments( keys %args ),
     );
 #   $resp->content( $content );
 #   $self->_convert_content( $resp );
@@ -2398,11 +2457,12 @@ options may be specified:
  -status
    specifies the desired status of the returned body
    (or bodies). Must be 'onorbit', 'decayed', or 'all'.
-   The default is 'all'. Note that this option
-   represents status at the time the search was done;
-   you can not combine it with the retrieve() date
-   options to find bodies onorbit as of a given date
-   in the past.
+   The default is 'all' under version 1 of the Space
+   Track interface, and 'onorbit' under version 2. Note
+   that this option represents status at the time the
+   search was done; you can not combine it with the
+   retrieve() date options to find bodies onorbit as of
+   a given date in the past.
  -tle
    specifies that you want TLE data retrieved for all
    bodies that satisfy the search criteria. This is
@@ -2763,7 +2823,7 @@ sub _search_name_v1 {
 }
 
 sub _search_name_v2 {	## no critic (RequireArgUnpacking)
-    splice @_, 1, 0, SATNAME => sub { return ( map { "~~$_" } @_ ) };
+    splice @_, 1, 0, SATNAME => sub { return "~~$_[0]" };
     goto &_search_rest;
 }
 
@@ -2879,7 +2939,7 @@ sub _search_oid_v1 {
 
 sub _search_oid_v2 {	## no critic (RequireArgUnpacking)
     my ( $self, @args ) = @_;
-    splice @_, 1, 0, NORAD_CAT_ID => sub { return @_ };
+    splice @_, 1, 0, NORAD_CAT_ID => sub { return $_[0] };
     goto &_search_rest;
 }
 
@@ -2929,7 +2989,12 @@ sub set {	## no critic (ProhibitAmbiguousNames)
 	my $value = shift @args;
 	$mutator{$name}->($self, $name, $value);
     }
-    return HTTP::Response->new (HTTP_OK, undef, undef, COPACETIC);
+    my $resp = HTTP::Response->new( HTTP_OK, COPACETIC, undef, COPACETIC );
+    $self->_add_pragmata( $resp,
+	'spacetrack-type' => 'set',
+    );
+    $self->_dump_headers( $resp );
+    return $resp;
 }
 
 
@@ -2948,6 +3013,23 @@ method. In addition, 'show' is recognized as a synonym for 'get', and
 'get' (or 'show') without arguments is special-cased to list all
 attribute names and their values. Attributes listed without a value have
 the undefined value.
+
+There are also a couple meta-commands, that in effect wrap other
+commands. These are specified before the command, and can (depending on
+the meta-command) have effect either right before the command is
+executed, right after it is executed, or both. If more than one
+meta-command is specified, the before-actions take place in the order
+specified, and the after-actions in the reverse of the order specified.
+
+The 'time' meta-command times the command, and writes the timing to
+standard error before any output from the command is written.
+
+The 'olist' meta-command turns TLE data into an observing list. This
+only affects results with C<spacetrack-type> of C<'orbit'>. If the
+content is affected, the C<spacetrack-type> will be changed to
+C<'observing-list'>. This meta-command is experimental, and may change
+function or be retracted.  It is unsupported when applied to commands
+that do not return TLE data.
 
 For commands that produce output, we allow a sort of pseudo-redirection
 of the output to a file, using the syntax ">filename" or ">>filename".
@@ -2980,6 +3062,83 @@ Unlike most of the other methods, this one returns nothing.
 =cut
 
 my $rdln;
+my %known_meta = (
+    olist	=> {
+	after	=> sub {
+	    my ( $self, $context, $rslt ) = @_;
+
+	    'ARRAY' eq ref $rslt
+		and return;
+	    $rslt->is_success()
+		and 'orbit' eq ( $self->content_type( $rslt ) || '' )
+		or return;
+
+	    my $content = $rslt->content();
+	    my @lines;
+
+	    if ( $content =~ m/ \A [[]? [{] /smx ) {
+		my $data = JSON::from_json( $content );
+		foreach my $datum ( @{ $data } ) {
+		    push @lines, [ sprintf '%05d', $datum->{NORAD_CAT_ID} ];
+		    defined $datum->{SATNAME}
+			and push @{ $lines[-1] }, $datum->{SATNAME};
+		}
+	    } else {
+
+		my @name;
+
+		foreach ( split qr{ \n }smx, $content ) {
+		    if ( m/ \A 1 \s+ ( \d+ ) /smx ) {
+			splice @name, 1;
+			push @lines, [ sprintf( '%05d', $1 ), @name ];
+			@name = ();
+		    } elsif ( m/ \A 2 \s+ \d+ /smx || m/ \A \s* [#] /smx ) {
+		    } else {
+			push @name, $_;
+		    }
+		}
+	    }
+
+	    foreach ( $rslt->header( pragma => undef ) ) {
+		my ( $name, $value ) = split qr{ \s* = \s* }smx, $_, 2;
+		'spacetrack-type' eq $name
+		    and $value = 'observing_list';
+		$self->_add_pragmata( $rslt, $name, $value );
+	    }
+
+	    $rslt->content( join '', map { "$_\n" } @lines );
+
+	    {
+		local $" = '';	# Make "@a" equivalent to join '', @a.
+		$rslt->content( join '',
+		    map { "@$_\n" }
+		    sort { $a->[0] <=> $b->[0] }
+		    @lines
+		);
+	    }
+	    $self->_dump_headers( $rslt );
+	    return;
+	},
+    },
+    time	=> {
+	before	=> sub {
+	    my ( $self, $context ) = @_;
+	    eval {
+		require Time::HiRes;
+		$context->{start_time} = Time::HiRes::time();
+		1;
+	    } or warn 'No timings available. Can not load Time::HiRes';
+	    return;
+	},
+	after	=> sub {
+	    my ( $self, $context, $rslt ) = @_;
+	    $context->{start_time}
+		and warn sprintf "Elapsed time: %.2f seconds\n",
+		    Time::HiRes::time() - $context->{start_time};
+	    return;
+	}
+    },
+);
 
 sub shell {
     my @args = @_;
@@ -3049,6 +3208,24 @@ EOD
 
 	$redir =~ s/ \A (>+) ~ /$1$ENV{HOME}/smx;
 	my $verb = lc shift @cmdarg;
+
+	my %meta_command = (
+	    before	=> [],
+	    after	=> [],
+	);
+
+	while ( my $def = $known_meta{$verb} ) {
+	    my %context;
+	    foreach my $key ( qw{ before after } ) {
+		$def->{$key}
+		    or next;
+		push @{ $meta_command{$key} }, sub {
+		    return $def->{$key}->( $self, \%context, @_ );
+		};
+	    }
+	    $verb = shift @cmdarg;
+	}
+
 	last if $verb eq 'exit' || $verb eq 'bye';
 	$verb eq 'show' and $verb = 'get';
 	$verb eq 'source' and do {
@@ -3081,6 +3258,11 @@ EOD
 	    $out = $stdout;
 	}
 	my $rslt;
+
+	foreach my $pseudo ( @{ $meta_command{before} } ) {
+	    $pseudo->();
+	}
+
 	if ($verb eq 'get' && @cmdarg == 0) {
 	    $rslt = [];
 	    foreach my $name ($self->attribute_names ()) {
@@ -3096,6 +3278,11 @@ EOD
 		next;
 	    };
 	}
+
+	foreach my $pseudo ( reverse @{ $meta_command{after} } ) {
+	    $pseudo->( $rslt );
+	}
+
 	if (ref $rslt eq 'ARRAY') {
 	    foreach (@$rslt) {print { $out } "$_\n"}
 	} elsif ($rslt->is_success) {
@@ -3309,16 +3496,75 @@ sub spaceflight {
 
 =item $resp = $st->spacetrack ($name_or_number);
 
-This method downloads the given bulk catalog of orbital elements from
-the Space Track web site. If the argument is an integer, it represents
-the number of the catalog to download. Otherwise, it is expected to be
-the name of the catalog, and whether you get a two-line or three-line
-dataset is specified by the setting of the with_name attribute. The
-return is the HTTP::Response object fetched. If an invalid catalog name
-is requested, an HTTP::Response object is returned, with an appropriate
-message and the error code set to RC_NOTFOUND from HTTP::Status (a.k.a.
-404). This will also happen if the HTTP get succeeds but we do not get
-the expected content.
+What this method does depends on the value of the C<space_track_version>
+attribute.
+
+If C<space_track_version == 1>, this method downloads the named (or
+numbered) bulk catalog. This interface is deprecated by Space Track, and
+is expected to be removed (by them) in October 2012. When the bulk data
+interface is removed (or as soon thereafter as I can manage) requests
+will be sent to the version 2 interface regardless of the
+C<space_track_version> setting.
+
+Under C<space_track_version == 1>, the following catalogs are available:
+
+    Name            Description             Number
+    md5             MD5 checksums              0
+    full            Full catalog               1
+    geosynchronous  Geosynchronous bodies      3
+    navigation      Navigation satellites      5
+    weather         Weather satellites         7
+    iridium         Iridium satellites         9
+    orbcomm         OrbComm satellites        11
+    globalstar      Globalstar satellites     13
+    intelsat        Intelsat satellites       15
+    inmarsat        Inmarsat satellites       17
+    amateur         Amateur Radio satellites  19
+    visible         Visible satellites        21
+    special         Special satellites        23
+
+These can also be requested by number. Except for C<md5> the numbers
+represent the data sets without common names; add one to get the
+corresponding data set with common names.
+
+When retrieving a bulk catalog by name, the value of the C<with_names>
+attribute determines whether you get common names.
+
+Because the removal of the bulk catalog data under version 1 of the
+interface is immanent, the requesting of a catalog which has no
+counterpart in the version 2 functionality will produce a warning. This
+applies to any request by number, plus requests for C<'navigation'>,
+C<'weather'>, C<'amateur'>, C<'visible'>, and C<'special'>.
+
+If C<space_track_version == 2>, this method executes canned queries to
+retrieve data sets similar to those above. If the bulk catalog can not
+be reasonably approximated by a query, it is unsupported under version
+2.
+
+Under C<space_track_version == 2>, the following catalogs are available:
+
+    Name            Description
+    full            Full catalog
+    payloads        All payloads
+    geosynchronous  Geosynchronous bodies
+    iridium         Iridium satellites
+    orbcomm         OrbComm satellites
+    globalstar      Globalstar satellites
+    intelsat        Intelsat satellites
+    inmarsat        Inmarsat satellites
+
+Retrieval by number is unsupported under version 2 of the interface.
+When retrieving a bulk catalog by name, the value of the C<with_names>
+attribute determines whether you get common names.
+
+Under either version of the interface, the method returns an
+L<HTTP::Response|HTTP::Response> object. If the operation succeeded, the
+content of the response will be the requested data, unzipped if you used
+the version 1 interface.
+
+If you requested a non-existent catalog, the response code will be
+C<HTTP_NOT_FOUND> (a.k.a.  404); otherwise the response code will be
+whatever the underlying HTTPS request returned.
 
 A Space Track username and password are required to use this method.
 
@@ -3330,31 +3576,18 @@ If this method succeeds, the response will contain headers
 These can be accessed by C<< $st->content_type( $resp ) >> and
 C<< $st->content_source( $resp ) >> respectively.
 
-Note that when requesting spacetrack data sets by catalog number the
-setting of the C<with_name> attribute is ignored.
-
-Assuming success, the content of the response is the literal element
-set requested. Yes, it comes down gzipped, but we unzip it for you.
-See the synopsis for sample code to retrieve and print the 'special'
-catalog in three-line format.
-
 A list of valid names and brief descriptions can be obtained by calling
-C<< $st->names ('spacetrack') >>. If you have set the C<verbose>
-attribute true (e.g. C<< $st->set (verbose => 1) >>), the content of the
-error response will include this list. Note, however, that this list
-does not determine what can be retrieved; if Space Track adds a data
-set, it can still be retrieved by number, even if it does not appear in
-the list by either number or name. Similarly, if they remove a data set,
-being on the list will not help. If they decide to renumber the data
-sets, retrieval by name will become useless until I get the code
-updated. The numbers correspond to the 'id=' portion of the URL for the
-dataset on the Space Track web site
+C<< $st->names ('spacetrack') >>. Note that this list will be different
+under different values of C<space_track_version>.
+
+If you have set the C<verbose> attribute true (e.g.  C<< $st->set
+(verbose => 1) >>), the content of the error response will include the
+list of valid names. Note, however, that under version 1 of the
+interface this list does not determine what can be retrieved.
 
 This method implicitly calls the C<login()> method if the session cookie
 is missing or expired. If C<login()> fails, you will get the
 HTTP::Response from C<login()>.
-
-B<Version 2 of the Space Track interface does not support this method.>
 
 =cut
 
@@ -3369,12 +3602,17 @@ B<Version 2 of the Space Track interface does not support this method.>
 sub _spacetrack_v1 {
     my ( $self, $catnum ) = @_;
     delete $self->{_pragmata};
+
+    $catalogs{spacetrack}[2]{$catnum}
+	or carp "Catalog '$catnum' will not be supported under the REST interface";
+
     $catnum =~ m/ \D /smx and do {
 	my $info = $catalogs{spacetrack}[1]{$catnum} or
-	    return $self->_no_such_catalog (spacetrack => $catnum);
+	    return $self->_no_such_catalog (spacetrack => 1, $catnum);
 	$catnum = $info->{number};
 	$self->{with_name} && $catnum++ unless $info->{special};
     };
+
     my $resp = $self->_get ('perl/dl.pl', ID => $catnum);
 # At this point, assuming we succeeded, we should have headers
 # content-disposition: attachment; filename=the_desired_file_name
@@ -3418,7 +3656,7 @@ Requested file  doesn't exist");history.go(-1);
 	# number, but whatever content they send back doesn't unzip, so
 	# we catch it here.
 	defined ($resp->content ())
-	    or return $self->_no_such_catalog (spacetrack => $catnum);
+	    or return $self->_no_such_catalog (spacetrack => 1, $catnum);
 	$resp->remove_header ('content-disposition');
 	$resp->header (
 	    'content-type' => 'text/plain',
@@ -3436,99 +3674,113 @@ Requested file  doesn't exist");history.go(-1);
 
 {
 
-=begin comment
-
-    my @catnum_to_name = (
-	undef,
-	[ full			=> 0 ],
-	[ full			=> 1 ],
-	[ geosynchronous	=> 0 ],
-	[ geosynchronous	=> 1 ],
-	undef,
-	undef,
-	undef,
-	undef,
-	[ iridium		=> 0 ],
-	[ iridium		=> 1 ],
+    my %unpack_query = (
+	HASH	=> sub { return $_[0] },
+	ARRAY	=> sub { return @{ $_[0] } },
     );
 
-=end comment
+    # Unpack a Space Track REST query. References are unpacked per the
+    # above table, if found there. Undefined values return an empty hash
+    # reference. Anything else croaks with a stack trace.
 
-=cut
+    sub _unpack_query {
+	my ( $arg ) = @_;
+	my $code = $unpack_query{ref $arg}
+	    or confess "Programming error - unexpected query $arg";
+	return $code->( $arg );
+    }
 
-    sub _spacetrack_v2 {
-	my ( $self, $catalog ) = @_;
+}
 
-	# TODO figure out how to make this work.
-	croak 'Bulk data downloads not supported by REST API';
+sub _spacetrack_v2 {
+    my ( $self, $catalog ) = @_;
 
-	# The following code works well enough, but is rather slow, and
-	# only covers those cases where there is a query that will fetch
-	# the data.
-	#
-	# There also may be a limit on how many bodies one can retrieve
-	# at a time.
+    my $with_name = $self->getv( 'with_name' );
 
-=begin comment
+    defined $catalog
+	and my $info = $catalogs{spacetrack}[2]{$catalog}
+	or return $self->_no_such_catalog( spacetrack => 2, $catalog );
 
-	my ( $catname, $with_name ) = $catalog =~ m/ \D /smx ?
-	( $catalog, $self->getv( 'with_name' ) ) :
-	@{ $catnum_to_name[ $catalog ] || [] };
+    $info->{no_name}
+	and not $with_name
+	and return $self->_spacetrack_v2_no_name( $info );
 
-	defined $catname
-	    and my $info = $catalogs{spacetrack}[2]{$catname}
-	    or return $self->_no_such_catalog( spacetrack => $catalog );
+    my %body_name;
 
-	my %body_name;
+    foreach my $query ( _unpack_query( $info->{satcat} ) ) {
 
-	foreach my $query ( @{ $info->{query} } ) {
+	my $rslt = $self->spacetrack_query_v2(
+	    basicspacedata	=> 'query',
+	    class		=> 'satcat',
+	    format		=> 'json',
+	    predicates	=> 'NORAD_CAT_ID,SATNAME',
+	    CURRENT		=> 'Y',
+	    DECAY		=> 'null-val',
+	    map { $_ => $query->{$_} } _sort_rest_arguments(
+		keys %{ $query } ),
+	);
 
-	    my $rslt = $self->spacetrack_query_v2(
-		basicspacedata	=> 'query',
-		class		=> 'satcat',
-		CURRENT		=> 'Y',
-		DECAY		=> 'null-val',
-		predicates		=> 'NORAD_CAT_ID,SATNAME',
-		format		=> 'json',
-		@{ $query },
-	    );
-
-	    $rslt->is_success()
-		or return $rslt;
-
-	    my $data = JSON::from_json( $rslt->content() );
-
-	    foreach my $body ( @{ JSON::from_json( $rslt->content() ) } ) {
-		$body_name{ $body->{NORAD_CAT_ID} } = $body->{SATNAME};
-	    }
-
-	}
-
-	$rslt = $self->_retrieve_v2( { format => 'json' }, keys %body_name );
 	$rslt->is_success()
 	    or return $rslt;
 
-	my $content = '';
 	my $data = JSON::from_json( $rslt->content() );
 
-	foreach my $tle (
-	    sort { $a->{NORAD_CAT_ID} <=> $b->{NORAD_CAT_ID} } @{ $data }
-	) {
-	    $with_name
-		and $content .= "$body_name{$tle->{NORAD_CAT_ID}}\n";
-	    $content .= "$tle->{TLE_LINE1}\n$tle->{TLE_LINE2}\n";
+	foreach my $body ( @{ JSON::from_json( $rslt->content() ) } ) {
+	    $body_name{ $body->{NORAD_CAT_ID} + 0 } = $body->{SATNAME};
 	}
 
-	$rslt->content( $content );
-	return $rslt;
-
-=end comment
-
-=cut
-
-	# https://beta.space-track.org/basicspacedata/query/class/satcat/DECAY/null-val/CURRENT/Y/orderby/NORAD_CAT_ID%20desc/predicates/INTLDES,SATNAME,NORAD_CAT_ID,COUNTRY,PERIOD,INCLINATION,APOGEE,PERIGEE,RCSVALUE,LAUNCH,COMMENT/format/html
     }
 
+    my %retrieve_opt = ( format	=> 'json' );
+    $info->{tle}
+	and @retrieve_opt{ keys %{ $info->{tle} } } =
+	    values %{ $info->{tle} };
+    my $rslt = $self->_retrieve_v2( \%retrieve_opt, keys %body_name );
+    $rslt->is_success()
+	or return $rslt;
+
+    my $content = '';
+    my $data = JSON::from_json( $rslt->content() );
+
+    foreach my $tle (
+	sort { $a->{NORAD_CAT_ID} <=> $b->{NORAD_CAT_ID} } @{ $data }
+    ) {
+	$with_name
+	    and $content .= "$body_name{$tle->{NORAD_CAT_ID} + 0}\n";
+	$content .= "$tle->{TLE_LINE1}\n$tle->{TLE_LINE2}\n";
+    }
+
+    $rslt->content( $content );
+    return $rslt;
+
+}
+
+sub _spacetrack_v2_no_name {
+    my ( $self, $info ) = @_;
+
+    my $query = $info->{no_name};
+
+    my $rslt = $self->spacetrack_query_v2(
+	basicspacedata	=> 'query',
+	class		=> 'tle_latest',
+	format		=> 'json',
+	orderby		=> 'NORAD_CAT_ID asc',
+	predicates	=> 'all',
+	ORDINAL		=> 1,
+	map { $_ => $query->{$_} } _sort_rest_arguments( keys %{
+	    $query } ),
+    );
+
+    $rslt->is_success()
+	or return $rslt;
+
+    my @data = @{ JSON::from_json( $rslt->content() ) };
+
+    my $content = join '', map {;
+	( "$_->{TLE_LINE1}\n", "$_->{TLE_LINE2}\n" )
+    } @data;
+
+    return HTTP::Response->new( HTTP_OK, COPACETIC, undef, $content );
 }
 
 =for html <a name="spacetrack_query_v2"></a>
@@ -3592,7 +3844,7 @@ sub spacetrack_query_v2 {
 ##  warn "Debug - $url/$cgi";
     my $resp = $self->_get_agent()->get( $url );
     $self->_dump_headers( $resp );
-    if ( $self->{pretty} &&
+    if ( $resp->is_success() && $self->{pretty} &&
 	_find_rest_arg_value( \@args, format => 'json' ) eq 'json'
     ) {
 	$resp->content(
@@ -3936,21 +4188,25 @@ sub _expand_oid_list {
 # formatting prefixes the 'contains' wildcard '~~' unless year, sequence
 # and part are all present.
 
-sub _format_international_id_rest {
-    my ( $intl_id, $class ) = @_;
-    my @parts = _parse_international_id( $intl_id );
-    my $yt;
-    if ( 'tle' eq $class ) {
-	$parts[0] %= 100;
-	$yt = '%02d';
-    } else {
-	$yt = '%04d-';
+{
+    my %two_digit_year_class = map { $_ => 1 } qw{ tle tle_latest };
+
+    sub _format_international_id_rest {
+	my ( $intl_id, $class ) = @_;
+	my @parts = _parse_international_id( $intl_id );
+	my $yt;
+	if ( $two_digit_year_class{$class} ) {
+	    $parts[0] %= 100;
+	    $yt = '%02d';
+	} else {
+	    $yt = '%04d-';
+	}
+	@parts >= 3
+	    and return sprintf "$yt%03d%s", @parts;
+	@parts >= 2
+	    and return sprintf "~~$yt%03d", @parts;
+	return sprintf "~~$yt", $parts[0];
     }
-    @parts >= 3
-	and return sprintf "$yt%03d%s", @parts;
-    @parts >= 2
-	and return sprintf "~~$yt%03d", @parts;
-    return sprintf "~~$yt", $parts[0];
 }
 
 # Parse a launch date, and format it for a Space-Track REST query. The
@@ -4174,7 +4430,7 @@ sub _make_space_track_base_url {
 sub _merge_names {
     my ( $resp, $name ) = @_;
     my $content = $resp->content();
-    if ( $content =~ m/ \A [[]? [{] / ) {
+    if ( $content =~ m/ \A [[]? [{] /smx ) {
 	my $data = JSON::decode_json( $content );
 	foreach my $body ( @{ $data } ) {
 	    my $oid = _normalize_oid( $body->{NORAD_CAT_ID} );
@@ -4317,37 +4573,59 @@ sub _mutate_verify_hostname {
 #	and returns the appropriate HTTP::Response object based on the
 #	current verbosity setting.
 
-my %no_such_name = (
-    celestrak => 'CelesTrak',
-    spaceflight => 'Manned Spaceflight',
-    spacetrack => 'Space Track',
-);
-my %no_such_trail = (
-    spacetrack => <<'EOD',
+{
+
+    my %no_such_name = (
+	celestrak => 'CelesTrak',
+	spaceflight => 'Manned Spaceflight',
+	spacetrack => 'Space Track',
+    );
+
+    my %no_such_trail = (
+	spacetrack => [ undef, <<'EOD' ],
 The Space Track data sets are actually numbered. The given number
 corresponds to the data set without names; if you are requesting data
 sets by number and want names, add 1 to the given number. When
 requesting Space Track data sets by number the 'with_name' attribute is
 ignored.
 EOD
-);
-sub _no_such_catalog {
-    my $self = shift;
-    my $source = lc shift;
-    my $catalog = shift;
-    my $note = shift;
-    my $name = $no_such_name{$source} || $source;
-    my $lead = $catalogs{$source}{$catalog} ?
-	"Missing $name catalog '$catalog'" :
-	"No such $name catalog as '$catalog'";
-    $lead .= defined $note ? " ($note)." : '.';
-    return HTTP::Response->new (HTTP_NOT_FOUND, "$lead\n")
-	unless $self->{verbose};
-    my $resp = $self->names ($source);
-    return HTTP::Response->new (HTTP_NOT_FOUND,
-	join '', "$lead Try one of:\n", $resp->content,
-	$no_such_trail{$source} || ''
     );
+
+    sub _no_such_catalog {
+	my ( $self, $source, @args ) = @_;
+
+	my $info = $catalogs{$source}
+	    or confess "Programming error - No such source as '$source'";
+
+	my $trailer = $no_such_trail{$source} || '';
+
+	if ( 'ARRAY' eq ref $info ) {
+	    my $inx = shift @args;
+	    $info = $info->[$inx]
+		or confess "Programming error - Illegal index $inx ",
+		    "for '$source'";
+	    'ARRAY' eq ref $trailer
+		and $trailer = $trailer->[$inx];
+	}
+
+	my ( $catalog, $note ) = @args;
+
+	my $name = $no_such_name{$source} || $source;
+
+	my $lead = $info->{$catalog} ?
+	    "Missing $name catalog '$catalog'" :
+	    "No such $name catalog as '$catalog'";
+	$lead .= defined $note ? " ($note)." : '.';
+
+	return HTTP::Response->new (HTTP_NOT_FOUND, "$lead\n")
+	    unless $self->{verbose};
+
+	my $resp = $self->names ($source);
+	return HTTP::Response->new (HTTP_NOT_FOUND,
+	    join '', "$lead Try one of:\n", $resp->content, $trailer,
+	);
+    }
+
 }
 
 #	_normalize_oid takes an OID and normalizes it. This is supposed
@@ -4586,7 +4864,8 @@ sub _parse_search_args {
     my $opt = $args[0];
     _parse_retrieve_dates( $opt );
 
-    $opt->{status} ||= 'all';
+    $opt->{status} ||= $DEFAULT_SPACE_TRACK_STATUS;
+
     $legal_search_status{$opt->{status}} or croak <<"EOD";
 Error - Illegal status '$opt->{status}'. You must specify one of
         @{[join ', ', map {"'$_'"} sort keys %legal_search_status]}
@@ -4807,6 +5086,29 @@ sub _search_generic_tabulate {
 =end comment
 
 =cut
+
+#	@keys = _sort_rest_arguments( keys %rest_args );
+#
+#	This subroutine sorts the argument names in the desired order.
+#	A better way to do this may be to use Unicode::Collate, which
+#	has been core since 5.7.3.
+
+sub _sort_rest_arguments {
+    return ( map { $_->[0] } sort { $a->[1] cmp $b->[1] } map { [ $_,
+	_swap_upper_and_lower( $_ ) ] } @_ );
+}
+
+#	$swapped = _swap_upper_and_lower( $original );
+#
+#	This subroutine swapps upper and lower case in its argument,
+#	using the transliteration operator. It should be used only by
+#	_sort_rest_arguments().
+
+sub _swap_upper_and_lower {
+    my ( $arg ) = @_;
+    $arg =~ tr/A-Za-z/a-zA-Z/;
+    return $arg;
+}
 
 #	_source takes a filename, and returns the contents of the file
 #	as a list. It dies if anything goes wrong.
