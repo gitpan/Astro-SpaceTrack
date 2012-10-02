@@ -119,16 +119,12 @@ stated otherwise.
 
 =over
 
-=item The retrieve() method (which retrieves TLEs for given OIDs) is
-incapable of returning the common name of the body when using version 2
-of the Space Track interface. I am informed that there is already a
-feature request for this, but that it has not yet been prioritized. In
-the meantime, if you B<really> want common names in your TLE data, you
-can get them via the C<search_oid()> method. As a convenience hack, the
-celestrak() and file() methods (which use retrieve() under the hood)
-will fill in the names from the Celestrak or file data list, if the
-C<with_name> attribute is true. This hack will be retracted when (and
-if) the REST interface becomes capable of returning NASA-format TLEs.
+=item In version 0.064_01 and before, the retrieve() method (which
+retrieves TLEs for given OIDs) was incapable of returning the common
+name of the body when using version 2 of the Space Track interface.
+Beginning with 0.064_02 this restriction is removed. The
+celestrak() and file() methods still prefer the object name from the
+observing list to the object name supplied by Space Track.
 
 =item The C<spacetrack()> method (which returns predefined packages of
 TLEs) is implemented by REST queries, and those bulk data packages which
@@ -215,7 +211,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.064_01';
+our $VERSION = '0.064_02';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1077,8 +1073,11 @@ following values are supported:
          box score.
  'get': The content is a parameter value.
  'help': The content is help text.
+ 'iridium_status': The content is Iridium status.
+ 'modeldef': The content is a REST model definition.
  'orbit': The content is NORAD data sets.
  'search': The content is Space Track search results.
+ 'set': The content is the result of a 'set' operation.
  undef: No spacetrack-type pragma was specified. The
         content is something else (typically 'OK').
 
@@ -1870,14 +1869,14 @@ Number ranges are represented as 'start-end', where both 'start' and
 'end' are catalog numbers. If 'start' > 'end', the numbers will be
 taken in the reverse order. Non-numeric ranges are ignored.
 
-You can specify options for the retrieval as either command-type
-options (e.g. retrieve ('-last5', ...)) or as a leading hash reference
-(e.g. retrieve ({last5 => 1}, ...)). If you specify the hash reference,
-option names must be specified in full, without the leading '-', and
-the argument list will not be parsed for command-type options. If you
-specify command-type options, they may be abbreviated, as long as
-the abbreviation is unique. Errors in either sort result in an
-exception being thrown.
+You can specify options for the retrieval as either command-type options
+(e.g. C<< retrieve ('-last5', ...) >>) or as a leading hash reference
+(e.g. C<< retrieve ({last5 => 1}, ...) >>). If you specify the hash
+reference, option names must be specified in full, without the leading
+'-', and the argument list will not be parsed for command-type options.
+If you specify command-type options, they may be abbreviated, as long as
+the abbreviation is unique. Errors in either sort result in an exception
+being thrown.
 
 The legal options are:
 
@@ -2023,10 +2022,29 @@ sub _retrieve_v2 {
 
     defined $rest->{format}
 	or $rest->{format} = 'tle';
+
+    my $no_execute = $self->getv( 'dump_headers' ) & DUMP_NO_EXECUTE;
+
+    my $converter;
+    if ( $rest->{format} eq 'tle' && $self->{with_name} ) {
+	$rest->{format} = 'json';
+	$no_execute
+	    or $converter = sub {
+	    my $items = JSON::from_json( $_[0] );
+	    my $rslt = '';
+	    foreach my $datum (
+		ref $items eq 'ARRAY' ? @{ $items } : $items
+	    ) {
+		$rslt .= join '', map { $datum->{"TLE_LINE$_"} . "\n" }
+		    0 .. 2;
+	    }
+	    return $rslt;
+	};
+    }
+
     $rest->{orderby} = 'EPOCH desc';
 
     my $content;
-    my $no_execute = $self->getv( 'dump_headers' ) & DUMP_NO_EXECUTE;
     my $joiner = (
 	$rest->{format} eq 'json' || $no_execute
     ) ? \&_append_data_json : \&_append_data_tle;
@@ -2059,6 +2077,10 @@ sub _retrieve_v2 {
     $content
 	and $content ne '[]'
 	or return HTTP::Response->new ( HTTP_NOT_FOUND, NO_RECORDS );
+
+    $converter
+	and $content
+	and $content = $converter->( $content );
 
     $no_execute
 	and return HTTP::Response->new(
@@ -2279,8 +2301,6 @@ sub _retrieve_v2 {
 	    foreach my $body ( @{ $bodies } ) {
 		my $info = $search_info{$body->{NORAD_CAT_ID}};
 		if ( $opt->{json} ) {
-		    $with_name
-			and $body->{SATNAME} = $info->{SATNAME};
 		    if ( $opt->{rcs} ) {
 			$body->{RCSSOURCE} = $info->{RCSSOURCE};
 			$body->{RCSVALUE} = $info->{RCSVALUE};
@@ -2288,8 +2308,9 @@ sub _retrieve_v2 {
 		} else {
 		    my @line_0;
 		    $with_name
-			and defined $info->{SATNAME}
-			and push @line_0, $info->{SATNAME};
+			and push @line_0, defined $info->{SATNAME} ?
+			    $info->{SATNAME} :
+			    $body->{TLE_LINE0};
 		    $opt->{rcs}
 			and defined $info->{RCSVALUE}
 			and push @line_0, "--rcs $info->{RCSVALUE}";
@@ -3079,9 +3100,12 @@ my %known_meta = (
 	    if ( $content =~ m/ \A [[]? [{] /smx ) {
 		my $data = JSON::from_json( $content );
 		foreach my $datum ( @{ $data } ) {
-		    push @lines, [ sprintf '%05d', $datum->{NORAD_CAT_ID} ];
-		    defined $datum->{SATNAME}
-			and push @{ $lines[-1] }, $datum->{SATNAME};
+		    push @lines, [
+			sprintf '%05d', $datum->{NORAD_CAT_ID},
+			defined $datum->{SATNAME} ? $datum->{SATNAME} :
+			defined $datum->{OBJECT_NAME} ? $datum->{OBJECT_NAME} :
+			(),
+		    ];
 		}
 	    } else {
 
@@ -3705,7 +3729,7 @@ sub _spacetrack_v2 {
 	and not $with_name
 	and return $self->_spacetrack_v2_no_name( $info );
 
-    my %body_name;
+    my %oid;
 
     foreach my $query ( _unpack_query( $info->{satcat} ) ) {
 
@@ -3726,7 +3750,7 @@ sub _spacetrack_v2 {
 	my $data = JSON::from_json( $rslt->content() );
 
 	foreach my $body ( @{ JSON::from_json( $rslt->content() ) } ) {
-	    $body_name{ $body->{NORAD_CAT_ID} + 0 } = $body->{SATNAME};
+	    $oid{ $body->{NORAD_CAT_ID} + 0 } = 1;
 	}
 
     }
@@ -3735,7 +3759,7 @@ sub _spacetrack_v2 {
     $info->{tle}
 	and @retrieve_opt{ keys %{ $info->{tle} } } =
 	    values %{ $info->{tle} };
-    my $rslt = $self->_retrieve_v2( \%retrieve_opt, keys %body_name );
+    my $rslt = $self->_retrieve_v2( \%retrieve_opt, keys %oid );
     $rslt->is_success()
 	or return $rslt;
 
@@ -3746,7 +3770,7 @@ sub _spacetrack_v2 {
 	sort { $a->{NORAD_CAT_ID} <=> $b->{NORAD_CAT_ID} } @{ $data }
     ) {
 	$with_name
-	    and $content .= "$body_name{$tle->{NORAD_CAT_ID} + 0}\n";
+	    and $content .= "$tle->{TLE_LINE0}\n";
 	$content .= "$tle->{TLE_LINE1}\n$tle->{TLE_LINE2}\n";
     }
 
@@ -3814,50 +3838,103 @@ call:
      } );
  );
 
+If this method is called directly from outside the C<Astro::SpaceTrack>
+name space, pragmata will be added to the results based on the
+arguments, as follows:
+
+For C<< basicspacedata => 'modeldef' >>
+
+ Pragma: spacetrack-type = modeldef
+ Pragma: spacetrack-source = spacetrack
+ Pragma: spacetrack-interface = 2
+
+For C<< basicspacedata => 'query' >> and C<< class => 'tle' >> or
+C<'tle_latest'>,
+
+ Pragma: spacetrack-type = orbit
+ Pragma: spacetrack-source = spacetrack
+ Pragma: spacetrack-interface = 2
+
 =cut
 
-sub spacetrack_query_v2 {
-    my ( $self, @args ) = @_;
+{
 
-    # Note that we need to add the comma to URI::Escape's RFC3986 list,
-    # since Space Track does not decode it.
-    my $url = $self->_make_space_track_base_url( 2 ) . '/' .
-	join '/', map {
-	    URI::Escape::uri_escape( $_, '^A-Za-z0-9.,_~:-' )
-	} @args;
+    my %tle_class = map { $_ => 1 } qw{ tle tle_latest };
 
-    if ( my $resp = $self->_dump_request(
-	    args	=> \@args,
-	    method	=> 'GET',
-	    url		=> $url,
-	    version	=> 2,
-	) ) {
+    sub spacetrack_query_v2 {
+	my ( $self, @args ) = @_;
+
+	# Note that we need to add the comma to URI::Escape's RFC3986 list,
+	# since Space Track does not decode it.
+	my $url = $self->_make_space_track_base_url( 2 ) . '/' .
+	    join '/', map {
+		URI::Escape::uri_escape( $_, '^A-Za-z0-9.,_~:-' )
+	    } @args;
+
+	if ( my $resp = $self->_dump_request(
+		args	=> \@args,
+		method	=> 'GET',
+		url		=> $url,
+		version	=> 2,
+	    ) ) {
+	    return $resp;
+	}
+
+	$self->_check_cookie_generic( 2 )
+	    or do {
+	    my $resp = $self->_login_v2();
+	    $resp->is_success()
+		or return $resp;
+	};
+##	warn "Debug - $url/$cgi";
+	my $resp = $self->_get_agent()->get( $url );
+
+	if ( $resp->is_success() ) {
+
+	    if ( $self->{pretty} &&
+		_find_rest_arg_value( \@args, format => 'json' ) eq 'json'
+	    ) {
+		$resp->content(
+		    JSON::to_json(
+			JSON::from_json( $resp->content() ), {
+			    utf8		=> 1,
+			    pretty		=> 1,
+			    canonical	=> 1,
+			},
+		    )
+		);
+	    }
+
+	    if ( __PACKAGE__ ne caller ) {
+
+		my $kind = _find_rest_arg_value( \@args,
+		    basicspacedata => '' );
+		my $class = _find_rest_arg_value( \@args,
+		    class => '' );
+
+		if ( 'modeldef' eq $kind ) {
+
+		    $self->_add_pragmata( $resp,
+			'spacetrack-type' => 'modeldef',
+			'spacetrack-source' => 'spacetrack',
+			'spacetrack-interface' => 2,
+		    );
+
+		} elsif ( 'query' eq $kind && $tle_class{$class} ) {
+
+		    $self->_add_pragmata( $resp,
+			'spacetrack-type' => 'orbit',
+			'spacetrack-source' => 'spacetrack',
+			'spacetrack-interface' => 2,
+		    );
+
+		}
+	    }
+	}
+
+	$self->_dump_headers( $resp );
 	return $resp;
     }
-
-    $self->_check_cookie_generic( 2 )
-	or do {
-	my $resp = $self->_login_v2();
-	$resp->is_success()
-	    or return $resp;
-    };
-##  warn "Debug - $url/$cgi";
-    my $resp = $self->_get_agent()->get( $url );
-    $self->_dump_headers( $resp );
-    if ( $resp->is_success() && $self->{pretty} &&
-	_find_rest_arg_value( \@args, format => 'json' ) eq 'json'
-    ) {
-	$resp->content(
-	    JSON::to_json(
-		JSON::from_json( $resp->content() ), {
-		    utf8		=> 1,
-		    pretty		=> 1,
-		    canonical	=> 1,
-		},
-	    )
-	);
-    }
-    return $resp;
 }
 
 sub _find_rest_arg_value {
@@ -3884,8 +3961,7 @@ sub _find_rest_arg_value {
 sub _add_pragmata {
     my ($self, $resp, @args) = @_;
     while (@args) {
-	my $name = shift @args;
-	my $value = shift @args;
+	my ( $name, $value ) = splice @args, 0, 2;
 	$self->{_pragmata}{$name} = $value;
 	$resp->push_header(pragma => "$name = $value");
     }
@@ -4422,7 +4498,7 @@ sub _make_space_track_base_url {
 #
 #	This subroutine takes an HTTP response object and a reference to
 #	a hash of OID names, and merges those names into the response.
-#	If the response is JSON, the names go in the SATNAME key,
+#	If the response is JSON, the names go in the OBJECT_NAME key,
 #	overriding whatever was there before. If the response is TLE,
 #	the names before the "1" line, and any names that were there
 #	before get dropped.
@@ -4435,7 +4511,7 @@ sub _merge_names {
 	foreach my $body ( @{ $data } ) {
 	    my $oid = _normalize_oid( $body->{NORAD_CAT_ID} );
 	    $name->{$oid}
-		and $body->{SATNAME} = $name->{$oid};
+		and $body->{OBJECT_NAME} = $name->{$oid};
 	}
 	$resp->content( JSON::encode_json( $data ) );
     } else {
@@ -5078,7 +5154,7 @@ sub _search_generic_tabulate {
 	@exclusion
 	    or return;
 	my $re = join '|', @exclusion;
-	@{ $data } = grep { $_->{SATNAME} !~ m/$re/smxi } @{ $data };
+	@{ $data } = grep { $_->{OBJECT_NAME} !~ m/$re/smxi } @{ $data };
 	return;
     }
 }
