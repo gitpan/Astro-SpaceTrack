@@ -157,11 +157,6 @@ C<-end_epoch> and C<-since_file> cause the C<tle> source do be used, as
 does any value for C<-status> other than C<-status=onorbit>. Otherwise,
 the C<tle_latest> source is used.
 
-=item The C<-sort> and C<-descending> retrieval options are ignored. The
-issue is that unless you do the equivalent of C<-sort=epoch -descending>
-the new interface gives you the oldest data on record, not the newest.
-This may change as the Space Track code evolves.
-
 =back
 
 =head1 DESCRIPTION
@@ -211,7 +206,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.064_02';
+our $VERSION = '0.065';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -234,12 +229,18 @@ use HTTP::Status qw{
 };
 use IO::File;
 use JSON qw{};
+use List::Util qw{ max };
 use LWP::UserAgent;	# Not in the base.
 use POSIX qw{strftime};
 use Scalar::Util 1.07 qw{ blessed openhandle };
 use Text::ParseWords;
 use Time::Local;
 use URI::Escape qw{};
+
+# Number of OIDs to retrieve at once. This is a global variable so I can
+# play with it, but it is neither documented nor supported, and I
+# reserve the right to change it or delete it without notice.
+our $RETRIEVAL_SIZE = 200;
 
 use constant COPACETIC => 'OK';
 use constant BAD_SPACETRACK_RESPONSE =>
@@ -354,9 +355,14 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	{	# Interface version 2 (REST)
 	    full => {
 		name	=> 'Full catalog',
-#		number	=> 1,
+		# We have to go through satcat to eliminate bodies that
+		# are not on orbit, since tle_latest includes bodies
+		# decayed in the last two years or so
 		satcat	=> {},
-		no_name	=> {},
+#		number	=> 1,
+	    },
+	    full_fast => {
+		name	=> 'Full catalog, with some objects no longer in orbit',
 	    },
 	    payloads	=> {
 		name	=> 'All payloads',
@@ -367,24 +373,27 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    geosynchronous => {
 		name	=> 'Geosynchronous satellites',
 #		number	=> 3,
+		# We have to go through satcat to eliminate bodies that
+		# are not on orbit, since tle_latest includes bodies
+		# decayed in the last two years or so
+		satcat	=> {
+		    PERIOD	=> '1425.6--1454.4'
+		},
 		# Note that the v2 interface specimen query is
 		#   PERIOD 1430--1450.
 		# The v1 definition is
 		#   MEAN_MOTION 0.99--1.01
 		#   ECCENTRICITY <0.01
-		# but none of these is available in class 'satcat'.
-		no_name	=> {
+		tle	=> {
+		    ECCENTRICITY	=> '<0.01',
+#		    MEAN_MOTION		=> '0.99--1.01',
+		},
+	    },
+	    geosynchronous_fast => {
+		name	=> 'Geosynchronous satellites, with some bodies no longer in orbit',
+		tle	=> {
 		    ECCENTRICITY	=> '<0.01',
 		    MEAN_MOTION		=> '0.99--1.01',
-		},
-		satcat	=> {
-		    # The v1 data set includes debris and rocket bodies
-#		    OBJECT_TYPE		=> 'PAYLOAD',
-		    # The below is equivalent to the v1 mean motion.
-		    PERIOD		=> '1425.6--1454.4',
-		},
-		tle	=> {	# Further restrictions on tle query
-		    ECCENTRICITY	=> '<0.01',
 		},
 	    },
 	    iridium => {
@@ -779,7 +788,7 @@ sub _box_score_v1 {
 	$resp->is_success()
 	    or return $resp;
 
-	my $data = JSON::decode_json( $resp->content() );
+	my $data = $self->_get_json_object()->decode( $resp->content() );
 
 	my $content;
 	foreach my $row ( @head ) {
@@ -1921,6 +1930,14 @@ more than one retrieval if necessary. To limit the damage done by a
 pernicious range, ranges greater than the max_range setting (which
 defaults to 500) will be ignored with a warning to STDERR.
 
+If you specify C<-json> and more than one retrieval is needed, data from
+retrievals after the first B<may> have field C<_file_of_record> added.
+This is because of the theoretical possibility that the database may be
+updated between the first and last queries, and therefore taking the
+maximum C<FILE> from queries after the first may cause updates to be
+skipped. The C<_file_of_record> key will appear only in data having a
+C<FILE> value greater than the largest C<FILE> in the first retrieval.
+
 This method implicitly calls the C<login()> method if the session cookie
 is missing or expired. If C<login()> fails, you will get the
 HTTP::Response from C<login()>.
@@ -1929,8 +1946,6 @@ If this method succeeds, a 'Pragma: spacetrack-type = orbit' header is
 added to the HTTP::Response object returned.
 
 =cut
-
-use constant RETRIEVAL_SIZE => 50;
 
 {
     my @dispatch = ( undef, \&_retrieve_v1, \&_retrieve_v2 );
@@ -1968,7 +1983,7 @@ sub _retrieve_v1 {
     local $_ = undef;
     my $resp;
     while ( @args ) {
-	my @batch = splice @args, 0, RETRIEVAL_SIZE;
+	my @batch = splice @args, 0, $RETRIEVAL_SIZE;
 	$resp = $self->_post ('perl/id_query.pl',
 	    ids => _stringify_oid_list( {
 		    separator	=> ' ',
@@ -2006,8 +2021,7 @@ sub _retrieve_v1 {
 sub _retrieve_v2 {
     my ( $self, @args ) = @_;
     delete $self->{_pragmata};
-    # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
-    # https://beta.space-track.org/basicspacedata/query/class/tle/format/tle/NORAD_CAT_ID/25544,36411,26871,27422/orderby/EPOCH%20desc/sublimit/1
+
     @args = _parse_retrieve_args(
 	SPACE_TRACK_V2_OPTIONS,
 	@args );
@@ -2015,79 +2029,53 @@ sub _retrieve_v2 {
 
     my $rest = $self->_convert_retrieve_options_to_rest( $opt );
 
-    # https://beta.space-track.org/basicspacedata/query/class/tle/NORAD_CAT_ID/25544/format/tle/orderby/FILE%20desc/limit/1
-
     @args = $self->_expand_oid_list( @args )
 	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
 
-    defined $rest->{format}
-	or $rest->{format} = 'tle';
-
     my $no_execute = $self->getv( 'dump_headers' ) & DUMP_NO_EXECUTE;
 
-    my $converter;
-    if ( $rest->{format} eq 'tle' && $self->{with_name} ) {
-	$rest->{format} = 'json';
-	$no_execute
-	    or $converter = sub {
-	    my $items = JSON::from_json( $_[0] );
-	    my $rslt = '';
-	    foreach my $datum (
-		ref $items eq 'ARRAY' ? @{ $items } : $items
-	    ) {
-		$rslt .= join '', map { $datum->{"TLE_LINE$_"} . "\n" }
-		    0 .. 2;
-	    }
-	    return $rslt;
-	};
-    }
+##  $rest->{orderby} = 'EPOCH desc';
 
-    $rest->{orderby} = 'EPOCH desc';
-
-    my $content;
-    my $joiner = (
+    my $context = {};
+    my $accumulator = (
 	$rest->{format} eq 'json' || $no_execute
-    ) ? \&_append_data_json : \&_append_data_tle;
+    ) ? \&_accumulate_data_json : \&_accumulate_data_tle;
 
     while ( @args ) {
 
-	my @batch = splice @args, 0, RETRIEVAL_SIZE;
+	my @batch = splice @args, 0, $RETRIEVAL_SIZE;
 	$rest->{NORAD_CAT_ID} = _stringify_oid_list( {
 		separator	=> ',',
-		range_operator	=> '--',
+##		range_operator	=> '--',
 	    }, @batch );
 
 	my $resp = $self->spacetrack_query_v2(
 	    basicspacedata	=> 'query',
-	    map { $_ => $rest->{$_} } _sort_rest_arguments( keys %{
-		$rest } )
+	    _sort_rest_arguments( $rest )
 	);
 
 	$resp->is_success()
 	    or $resp->code() == HTTP_I_AM_A_TEAPOT
 	    or return $resp;
 
-	my $data = $resp->content();
-	$data =~ m/ function [.] key-exists /smxi
-	    and $data = '';
-	$joiner->( $content, $data );
+	$accumulator->( $self, $context, $resp );
 
     }
 
-    $content
-	and $content ne '[]'
+    $context->{data}
 	or return HTTP::Response->new ( HTTP_NOT_FOUND, NO_RECORDS );
 
-    $converter
-	and $content
-	and $content = $converter->( $content );
+    ref $context->{data}
+	and $context->{data} = $self->_get_json_object()->encode(
+	$context->{data} );
 
     $no_execute
 	and return HTTP::Response->new(
-	    HTTP_I_AM_A_TEAPOT, undef, undef, $content );
+	    HTTP_I_AM_A_TEAPOT, undef, undef, $context->{data} );
 
     my $resp = HTTP::Response->new( HTTP_OK, COPACETIC, undef,
-	$content );
+	$context->{data} );
+
     $self->_convert_content( $resp );
     $self->_add_pragmata( $resp,
 	'spacetrack-type' => 'orbit',
@@ -2138,11 +2126,22 @@ sub _retrieve_v2 {
 
 	foreach my $name (
 	    qw{ class format },
-	    qw{ ECCENTRICITY FILE MEAN_MOTION },
+	    qw{ ECCENTRICITY FILE MEAN_MOTION OBJECT_NAME },
 	) {
 	    defined $opt->{$name}
 		and $rest{$name} = $opt->{$name};
 	}
+
+	defined $rest{format}
+	    or $rest{format} = 'tle';
+
+	$rest{format} eq 'tle'
+	    and $self->{with_name}
+	    and $rest{format} = '3le';
+
+	$rest{format} eq '3le'
+	    and not defined $rest{predicates}
+	    and $rest{predicates} = 'OBJECT_NAME,TLE_LINE1,TLE_LINE2';
 
 	if ( $rest{class} eq 'tle_latest' ) {
 	    if ( defined $rest{sublimit} && $rest{sublimit} <= 5 ) {
@@ -2241,7 +2240,7 @@ sub _retrieve_v2 {
 	    @args = (
 		_stringify_oid_list( {
 			separator	=> ',',
-			range_operator	=> '--',
+##			range_operator	=> '--',
 		    },
 		    @args
 		)
@@ -2271,7 +2270,7 @@ sub _retrieve_v2 {
 	    $rslt->is_success()
 		or return $rslt;
 
-	    my $data = JSON::decode_json( $rslt->content() );
+	    my $data = $self->_get_json_object()->decode( $rslt->content() );
 
 ##	    $self->_simulate_rest_exclude( $opt, $data );
 
@@ -2286,7 +2285,6 @@ sub _retrieve_v2 {
 	    my $with_name = $self->{with_name};
 
 	    $opt->{format} = 'json';
-##	    $rest_args = $self->_convert_retrieve_options_to_rest( $opt );
 
 	    {
 		local $self->{pretty} = 0;
@@ -2296,7 +2294,7 @@ sub _retrieve_v2 {
 	    $rslt->is_success()
 		or return $rslt;
 	    my %search_info = map { $_->{NORAD_CAT_ID} => $_ } @found;
-	    my $bodies = JSON::decode_json( $rslt->content() );
+	    my $bodies = $self->_get_json_object()->decode( $rslt->content() );
 	    my $content;
 	    foreach my $body ( @{ $bodies } ) {
 		my $info = $search_info{$body->{NORAD_CAT_ID}};
@@ -2324,11 +2322,7 @@ EOD
 	    }
 
 	    $opt->{json}
-		and $content = JSON::to_json( $bodies, {
-		    utf8	=> 1,
-		    pretty	=> $self->{pretty},
-		    canonical	=> $self->{pretty},
-		} );
+		and $content = $self->_get_json_object()->encode( $bodies );
 
 	    $rslt = HTTP::Response->new( HTTP_OK, undef, undef, $content );
 	    $self->_add_pragmata( $rslt,
@@ -2341,11 +2335,7 @@ EOD
 
 	    my $content;
 	    if ( $opt->{json} ) {
-		$content = JSON::to_json( \@found, {
-			utf8		=> 1,
-			pretty		=> $self->{pretty},
-			canonical	=> $self->{pretty},
-		    } );
+		$content = $self->_get_json_object()->encode( \@found );
 	    } else {
 		foreach my $datum (
 		    \%headings,
@@ -2421,7 +2411,7 @@ sub __search_rest_raw {
 
     my $resp = $self->spacetrack_query_v2(
 	basicspacedata	=> 'query',
-	map { $_ => $args{$_} } _sort_rest_arguments( keys %args ),
+	_sort_rest_arguments( \%args ),
     );
 #   $resp->content( $content );
 #   $self->_convert_content( $resp );
@@ -3098,7 +3088,7 @@ my %known_meta = (
 	    my @lines;
 
 	    if ( $content =~ m/ \A [[]? [{] /smx ) {
-		my $data = JSON::from_json( $content );
+		my $data = $self->_get_json_object()->decode( $content );
 		foreach my $datum ( @{ $data } ) {
 		    push @lines, [
 			sprintf '%05d', $datum->{NORAD_CAT_ID},
@@ -3569,17 +3559,35 @@ Under C<space_track_version == 2>, the following catalogs are available:
 
     Name            Description
     full            Full catalog
+    full_fast       Full catalog, faster but less
+                        accurate query
     payloads        All payloads
     geosynchronous  Geosynchronous bodies
+    geosynchronous_fast Geosynchronous bodies, faster
+                        but less accurate query
     iridium         Iridium satellites
     orbcomm         OrbComm satellites
     globalstar      Globalstar satellites
     intelsat        Intelsat satellites
     inmarsat        Inmarsat satellites
 
+The C<*_fast> queries are, as of this writing, much faster than their
+not-fast variants. But they gain speed by omitting a check on whether or
+not the body is still in orbit. These queries are not supported, and may
+be retracted without notice if the speed difference becomes tolerable.
+
 Retrieval by number is unsupported under version 2 of the interface.
 When retrieving a bulk catalog by name, the value of the C<with_names>
 attribute determines whether you get common names.
+
+Under version 2 of the interface, the following options are supported:
+
+ -json
+   specifies the TLE be returned in JSON format
+
+If supported, options may be specified either in command-line style
+(that is, as C<< spacetrack( '-json', ... ) >>) or as a hash reference
+(that is, as C<< spacetrack( { json => 1 }, ... ) >>).
 
 Under either version of the interface, the method returns an
 L<HTTP::Response|HTTP::Response> object. If the operation succeeded, the
@@ -3717,94 +3725,79 @@ Requested file  doesn't exist");history.go(-1);
 }
 
 sub _spacetrack_v2 {
-    my ( $self, $catalog ) = @_;
+    my ( $self, @args ) = @_;
 
-    my $with_name = $self->getv( 'with_name' );
+    my ( $opt, $catalog ) = _parse_args(
+	SPACE_TRACK_V2_OPTIONS, @args );
+
+    my $format = $self->getv( 'with_name' ) ? '3le' : 'tle';
 
     defined $catalog
 	and my $info = $catalogs{spacetrack}[2]{$catalog}
 	or return $self->_no_such_catalog( spacetrack => 2, $catalog );
 
-    $info->{no_name}
-	and not $with_name
-	and return $self->_spacetrack_v2_no_name( $info );
+    my %retrieve_opt = %{
+	$self->_convert_retrieve_options_to_rest( $opt )
+    };
+    $info->{tle}
+	and @retrieve_opt{ keys %{ $info->{tle} } } =
+	    values %{ $info->{tle} };
 
-    my %oid;
+    my $rslt;
 
-    foreach my $query ( _unpack_query( $info->{satcat} ) ) {
+    if ( $info->{satcat} ) {
 
-	my $rslt = $self->spacetrack_query_v2(
+	my %oid;
+
+	foreach my $query ( _unpack_query( $info->{satcat} ) ) {
+
+	    $rslt = $self->spacetrack_query_v2(
+		basicspacedata	=> 'query',
+		class		=> 'satcat',
+		format		=> 'json',
+		predicates	=> 'NORAD_CAT_ID',
+		CURRENT		=> 'Y',
+		DECAY		=> 'null-val',
+		_sort_rest_arguments( $query ),
+	    );
+
+	    $rslt->is_success()
+		or return $rslt;
+
+	    foreach my $body ( @{
+		$self->_get_json_object()->decode( $rslt->content() )
+	    } ) {
+		$oid{ $body->{NORAD_CAT_ID} + 0 } = 1;
+	    }
+
+	}
+
+	$rslt = $self->_retrieve_v2( \%retrieve_opt,
+	    sort { $a <=> $b } keys %oid );
+
+	$rslt->is_success()
+	    or return $rslt;
+
+    } else {
+
+	$rslt = $self->spacetrack_query_v2(
 	    basicspacedata	=> 'query',
-	    class		=> 'satcat',
-	    format		=> 'json',
-	    predicates	=> 'NORAD_CAT_ID,SATNAME',
-	    CURRENT		=> 'Y',
-	    DECAY		=> 'null-val',
-	    map { $_ => $query->{$_} } _sort_rest_arguments(
-		keys %{ $query } ),
+	    _sort_rest_arguments( \%retrieve_opt ),
 	);
 
 	$rslt->is_success()
 	    or return $rslt;
 
-	my $data = JSON::from_json( $rslt->content() );
-
-	foreach my $body ( @{ JSON::from_json( $rslt->content() ) } ) {
-	    $oid{ $body->{NORAD_CAT_ID} + 0 } = 1;
-	}
+	$self->_add_pragmata( $rslt,
+	    'spacetrack-type' => 'orbit',
+	    'spacetrack-source' => 'spacetrack',
+	    'spacetrack-interface' => 2,
+	);
 
     }
 
-    my %retrieve_opt = ( format	=> 'json' );
-    $info->{tle}
-	and @retrieve_opt{ keys %{ $info->{tle} } } =
-	    values %{ $info->{tle} };
-    my $rslt = $self->_retrieve_v2( \%retrieve_opt, keys %oid );
-    $rslt->is_success()
-	or return $rslt;
-
-    my $content = '';
-    my $data = JSON::from_json( $rslt->content() );
-
-    foreach my $tle (
-	sort { $a->{NORAD_CAT_ID} <=> $b->{NORAD_CAT_ID} } @{ $data }
-    ) {
-	$with_name
-	    and $content .= "$tle->{TLE_LINE0}\n";
-	$content .= "$tle->{TLE_LINE1}\n$tle->{TLE_LINE2}\n";
-    }
-
-    $rslt->content( $content );
     return $rslt;
 
-}
-
-sub _spacetrack_v2_no_name {
-    my ( $self, $info ) = @_;
-
-    my $query = $info->{no_name};
-
-    my $rslt = $self->spacetrack_query_v2(
-	basicspacedata	=> 'query',
-	class		=> 'tle_latest',
-	format		=> 'json',
-	orderby		=> 'NORAD_CAT_ID asc',
-	predicates	=> 'all',
-	ORDINAL		=> 1,
-	map { $_ => $query->{$_} } _sort_rest_arguments( keys %{
-	    $query } ),
-    );
-
-    $rslt->is_success()
-	or return $rslt;
-
-    my @data = @{ JSON::from_json( $rslt->content() ) };
-
-    my $content = join '', map {;
-	( "$_->{TLE_LINE1}\n", "$_->{TLE_LINE2}\n" )
-    } @data;
-
-    return HTTP::Response->new( HTTP_OK, COPACETIC, undef, $content );
 }
 
 =for html <a name="spacetrack_query_v2"></a>
@@ -3894,15 +3887,9 @@ C<'tle_latest'>,
 	    if ( $self->{pretty} &&
 		_find_rest_arg_value( \@args, format => 'json' ) eq 'json'
 	    ) {
-		$resp->content(
-		    JSON::to_json(
-			JSON::from_json( $resp->content() ), {
-			    utf8		=> 1,
-			    pretty		=> 1,
-			    canonical	=> 1,
-			},
-		    )
-		);
+		my $json = $self->_get_json_object();
+		$resp->content( $json->encode( $json->decode(
+			    $resp->content() ) ) );
 	    }
 
 	    if ( __PACKAGE__ ne caller ) {
@@ -3946,6 +3933,160 @@ sub _find_rest_arg_value {
     return $default;
 }
 
+=for html <a name="update"></a>
+
+=item $resp = $st->update( $file_name );
+
+This method updates the named TLE file, which must be in JSON format. On
+a successful update, the content of the returned HTTP::Response object
+is the updated TLE data, in whatever format is desired. If any updates
+were in fact found, the file is rewritten. The rewritten JSON will be
+pretty if the C<pretty> attribute is true.
+
+The file to be updated can be generated by setting the
+C<space_track_version> attribute to C<2>, and using the C<-json> option
+on any of the methods that accesses Space Track data. For example,
+
+ # Assuming $ENV{SPACETRACK_USER} contains
+ # username/password
+ my $st = Astro::SpaceTrack->new(
+     space_track_version => 2,
+     pretty              => 1,
+ );
+ my $rslt = $st->spacetrack( { json => 1 }, 'iridium' );
+ $rslt->is_success()
+     or die $rslt->status_line();
+ open my $fh, '>', 'iridium.json'
+     or die "Failed to open file: $!";
+ print { $fh } $rslt->content();
+ close $fh;
+
+The following is the equivalent example using the F<SpaceTrack> script:
+
+ SpaceTrack> set space_track_version 2 pretty 1
+ SpaceTrack> spacetrack -json iridium >iridium.json
+
+This method uses the Space Track Version 2 interface, regardless of the
+setting of the C<space_track_version> attribute. It reads the file to be
+updated, determines the highest C<FILE> value, and then requests the
+given OIDs, restricting the return to C<FILE> values greater than the
+highest found. If anything is returned, the file is rewritten.
+
+The following options may be specified:
+
+ -json
+   specifies the TLE be returned in JSON format
+
+Options may be specified either in command-line style (that is, as
+C<< spacetrack( '-json', ... ) >>) or as a hash reference (that is, as
+C<< spacetrack( { json => 1 }, ... ) >>).
+
+B<Note> that there is no way to specify the C<-rcs> or C<-effective>
+options. If the file being updated contains these values, they will be
+lost as the individual OIDs are updated.
+
+=cut
+
+{
+
+    my %encode = (
+	'3le'	=> sub {
+	    my ( $json, $data ) = @_;
+	    return join '', map {
+		"$_->{OBJECT_NAME}\n$_->{TLE_LINE1}\n$_->{TLE_LINE2}\n"
+	    } @{ $data };
+	},
+	json	=> sub {
+	    my ( $json, $data ) = @_;
+	    return $json->encode( $data );
+	},
+	tle	=> sub {
+	    my ( $json, $data ) = @_;
+	    return join '', map {
+		"$_->{TLE_LINE1}\n$_->{TLE_LINE2}\n"
+	    } @{ $data };
+	},
+    );
+
+    sub update {
+	my ( $self, @args ) = @_;
+
+	my ( $opt, $fn ) = _parse_retrieve_args(
+	    SPACE_TRACK_V2_OPTIONS, @args );
+
+	$opt = { %{ $opt } };	# Since we modify it.
+
+	delete $opt->{start_epoch}
+	    and croak '-start_epoch not allowed';
+	delete $opt->{end_epoch}
+	    and croak '-end_epoch not allowed';
+
+	my $json = $self->_get_json_object();
+	my $data;
+	{
+	    local $/ = undef;
+	    open my $fh, '<', $fn
+		or croak "Unable to open $fn: $!";
+	    $data = $json->decode( <$fh> );
+	    close $fh;
+	}
+
+	my $file = -1;
+	my @oids;
+	foreach my $datum ( @{ $data } ) {
+	    push @oids, $datum->{NORAD_CAT_ID};
+	    my $ff = defined $datum->{_file_of_record} ?
+		delete $datum->{_file_of_record} :
+		$datum->{FILE};
+	    $ff > $file
+		and $file = $ff;
+	}
+
+	defined $opt->{since_file}
+	    or $opt->{since_file} = $file;
+
+	my $format = delete $opt->{json} ? 'json' :
+	    $self->getv( 'with_name' ) ? '3le' : 'tle';
+	$opt->{format} = 'json';
+
+	my $resp = $self->_retrieve_v2( $opt, sort { $a <=> $b } @oids );
+
+	if ( $resp->code() == HTTP_NOT_FOUND ) {
+
+	    $resp->code( HTTP_OK );
+	    $self->_add_pragmata( $resp,
+		'spacetrack-type' => 'orbit',
+		'spacetrack-source' => 'spacetrack',
+		'spacetrack-interface' => 2,
+	    );
+
+	} else {
+
+	    $resp->is_success()
+		or return $resp;
+
+	    my %merge = map { $_->{NORAD_CAT_ID} => $_ } @{ $data };
+
+	    foreach my $datum ( @{ $json->decode( $resp->content() ) } ) {
+		%{ $merge{$datum->{NORAD_CAT_ID}} } = %{ $datum };
+	    }
+
+	    {
+		open my $fh, '>', $fn
+		    or croak "Failed to open $fn: $!";
+		print { $fh } $json->encode( $data );
+		close $fh;
+	    }
+
+	}
+
+	$resp->content( $encode{$format}->( $json, $data ) );
+
+	return $resp;
+    }
+
+}
+
 
 ####
 #
@@ -3968,36 +4109,41 @@ sub _add_pragmata {
     return;
 }
 
-# Subroutine _append_data_json() appends all subsequent arguments to its
-# first argument, which is assumed to be either undef or a JSON array.
-# Subsequent arguments are assumed to be either JSON arrays or JSON
-# hashes. It returns nothing. The first argument MUST NOT be something
-# unmodifiable.
+sub _accumulate_data_json {
+    my ( $self, $context, $resp ) = @_;
 
-sub _append_data_json {
-    my ( undef, @arg ) = @_;
-    foreach ( @arg ) {
-	$_ eq '[]'
-	    and next;
-	if ( m/ \A \s* [{] .* [}] \s* \z /smx ) {
-	    s/ [{] /[{/smx;
-	    s/ [}] (?= \s* \z ) /}]/smx;
+    my $json = $context->{json} ||= $self->_get_json_object();
+
+    my $data = $json->decode( $resp->content() );
+
+    'ARRAY' eq ref $data
+	or $data = [ $data ];
+
+    @{ $data }
+	or return;
+
+    if ( $context->{data} ) {
+	foreach my $datum ( @{ $data } ) {
+	    defined $datum->{FILE}
+		and $datum->{FILE} > $context->{file}
+		and $datum->{_file_of_record} = $context->{file};
 	}
-	if ( defined $_[0] ) {
-	    s/ [[] //smx;
-	    $_[0] =~ s/ []] (?= \s* \z ) /,/smx;
-	}
-	$_[0] .= $_;
+	push @{ $context->{data} }, @{ $data };
+    } else {
+	$context->{file} = max( -1, map { $_->{FILE} } grep { defined
+	    $_->{FILE} } @{ $data } );
+	$context->{data} = $data;
     }
+
     return;
 }
 
-# Subroutine _append_data_tle() appends all subsequent arguments to its
-# first argument. It returns nothing. The first argument MUST NOT be
-# something unmodifiable.
-
-sub _append_data_tle {
-    $_[0] .= join '', @_[ 1 .. $#_ ];
+sub _accumulate_data_tle {
+    my ( $self, $context, $resp ) = @_;
+    my $content = $resp->content();
+    defined $content
+	and $content ne ''
+	and $context->{data} .= $content;
     return;
 }
 
@@ -4217,16 +4363,27 @@ sub _dump_request {
     $self->{dump_headers} & DUMP_REQUEST
 	or return;
 
-    my $dumper = _get_dumper( pretty => 1 ) or return;
-
-    my $yaml = $dumper->( \%args );
+    my $json = $self->_get_json_object( pretty => 1 )
+	or return;
 
     $self->{dump_headers} & DUMP_NO_EXECUTE
 	and return HTTP::Response->new(
-	HTTP_I_AM_A_TEAPOT, undef, undef, $yaml );
+	HTTP_I_AM_A_TEAPOT, undef, undef, $json->encode( \%args )
+    );
 
-    warn $yaml;
+    warn $json->encode( \%args );
+
     return;
+}
+
+sub _get_json_object {
+    my ( $self, %arg ) = @_;
+    defined $arg{pretty}
+	or $arg{pretty} = $self->{pretty};
+    my $json = JSON->new()->utf8();
+    $arg{pretty}
+	and $json->pretty()->canonical();
+    return $json;
 }
 
 # my @oids = $self->_expand_oid_list( @args );
@@ -4400,19 +4557,6 @@ sub _get_space_track_domain {
 	or $version = $self->{space_track_version};
     return $self->{_space_track_interface}[$version]{domain_space_track};
 }
-	
-# _get_dumper() retrieves a dumper and returns a code reference to it.
-# The dumper will pretty-print if C<< ( pretty => 1 ) >> is passed as
-# argument and the dumper is capable of it.
-
-sub _get_dumper {
-    my %arg = @_;
-    my $json = JSON->new()->utf8( 1 );
-    $arg{pretty} and $json->pretty( 1 );
-    return sub {
-	return $json->encode( $_[0] );
-    }
-}
 
 # __get_loader() retrieves a loader. A code reference to it is returned.
 #
@@ -4458,11 +4602,19 @@ sub _handle_observing_list {
     }
     my $resp = $self->retrieve( $opt, sort {$a <=> $b} @catnum );
     if ( $resp->is_success ) {
+
+=begin comment
+
 	$self->getv( 'with_name' )
 	    and $self->getv( 'space_track_version' ) == 2
-	    and _merge_names( $resp, {
+	    and $self->_merge_names( $resp, {
 		    map { _normalize_oid( $_->[0] ) => $_->[1] } @data },
 	    );
+
+=end comment
+
+=cut
+
 	unless ( $self->{_pragmata} ) {
 	    $self->_add_pragmata($resp,
 		'spacetrack-type' => 'orbit',
@@ -4494,6 +4646,8 @@ sub _make_space_track_base_url {
 	$self->_get_space_track_domain( $version );
 }
 
+=begin comment
+
 #	_merge_names( $resp, $names );
 #
 #	This subroutine takes an HTTP response object and a reference to
@@ -4504,16 +4658,19 @@ sub _make_space_track_base_url {
 #	before get dropped.
 
 sub _merge_names {
-    my ( $resp, $name ) = @_;
+    my ( $self, $resp, $name ) = @_;
     my $content = $resp->content();
-    if ( $content =~ m/ \A [[]? [{] /smx ) {
-	my $data = JSON::decode_json( $content );
+    if ( $content =~ m/ \A \s* [[]? \s* [{] /smx ) {
+	my $json = $self->_get_json_object();
+	my $data = $json->decode( $content );
 	foreach my $body ( @{ $data } ) {
 	    my $oid = _normalize_oid( $body->{NORAD_CAT_ID} );
 	    $name->{$oid}
-		and $body->{OBJECT_NAME} = $name->{$oid};
+		or next;
+	    $body->{OBJECT_NAME} = $name->{$oid};
+	    $body->{TLE_LINE0} = "0 $name->{$oid}";
 	}
-	$resp->content( JSON::encode_json( $data ) );
+	$resp->content( $json->encode( $data ) );
     } else {
 	my $rslt;
 	foreach my $tle_line (
@@ -4533,8 +4690,12 @@ sub _merge_names {
     return;
 }
 
-# mung_login_status() takes as its argument an HTTP::Response object. If
-# the code is 500 and the message suggests a certificate problem, add
+=end comment
+
+=cut
+
+# _mung_login_status() takes as its argument an HTTP::Response object.
+# If the code is 500 and the message suggests a certificate problem, add
 # the suggestion that the user set verify_hostname false.
 
 sub _mung_login_status {
@@ -4854,8 +5015,7 @@ EOD
 #	The return is the same hash reference that was passed in.
 
 sub _parse_retrieve_dates {
-    my ( $opt, $ctl ) = @_;
-    $ctl ||= {};
+    my ( $opt ) = @_;
 
     my $found;
     foreach my $key ( qw{ end_epoch start_epoch } ) {
@@ -5163,22 +5323,49 @@ sub _search_generic_tabulate {
 
 =cut
 
-#	@keys = _sort_rest_arguments( keys %rest_args );
+#	@keys = _sort_rest_arguments( \%rest_args );
 #
 #	This subroutine sorts the argument names in the desired order.
 #	A better way to do this may be to use Unicode::Collate, which
 #	has been core since 5.7.3.
 
-sub _sort_rest_arguments {
-    return ( map { $_->[0] } sort { $a->[1] cmp $b->[1] } map { [ $_,
-	_swap_upper_and_lower( $_ ) ] } @_ );
+{
+
+    my %special = map { $_ => 1 } qw{ basicspacedata extendedspacedata };
+
+    sub _sort_rest_arguments {
+	my ( $rest_args ) = @_;
+
+	'HASH' eq ref $rest_args
+	    or return;
+
+	my @rslt;
+
+	foreach my $key ( keys %special ) {
+	    @rslt
+		and croak "You may not specify both '$rslt[0]' and '$key'";
+	    defined $rest_args->{$key}
+		and push @rslt, $key, $rest_args->{$key};
+	}
+
+
+	push @rslt, map { ( $_->[0], $rest_args->{$_->[0]} ) }
+	    sort { $a->[1] cmp $b->[1] }
+	    # Oh, for 5.14 and tr///r
+	    map { [ $_, _swap_upper_and_lower( $_ ) ] }
+	    grep { ! $special{$_} }
+	    keys %{ $rest_args };
+
+	return @rslt;
+    }
 }
 
 #	$swapped = _swap_upper_and_lower( $original );
 #
 #	This subroutine swapps upper and lower case in its argument,
 #	using the transliteration operator. It should be used only by
-#	_sort_rest_arguments().
+#	_sort_rest_arguments(). This can go away in favor of tr///r when
+#	(if!) the minimum version becomes 5.14.
 
 sub _swap_upper_and_lower {
     my ( $arg ) = @_;
@@ -5214,8 +5401,8 @@ EOD
 # stringified result. The keys used are
 #   separator -- The string used to separate OID specifications. The
 #       default is ','.
-#   range_operator -- The string used to specify a range. The default is
-#       '--'.
+#   range_operator -- The string used to specify a range. If omitted,
+#       ranges will not be constructed.
 #
 # Note that ranges containing only two OIDs (e.g. 5-6) will be expanded
 # as "5,6", not "5-6" (presuming $range_operator is '-').
@@ -5229,37 +5416,41 @@ sub _stringify_oid_list {
 	or return @args;
 
     my $separator = defined $opt->{separator} ? $opt->{separator} : ',';
-    my $range_operator = defined $opt->{range_operator} ?
-	$opt->{range_operator} : '--';
+    my $range_operator = $opt->{range_operator};
 
-    foreach my $arg ( sort { $a <=> $b } @args ) {
-	if ( 'ARRAY' eq ref $rslt[-1] ) {
-	    if ( $arg == $rslt[-1][1] + 1 ) {
-		$rslt[-1][1] = $arg;
+    if ( defined $range_operator ) {
+	foreach my $arg ( sort { $a <=> $b } @args ) {
+	    if ( 'ARRAY' eq ref $rslt[-1] ) {
+		if ( $arg == $rslt[-1][1] + 1 ) {
+		    $rslt[-1][1] = $arg;
+		} else {
+		    $arg > $rslt[-1][1]
+			and push @rslt, $arg;
+		}
 	    } else {
-		$arg > $rslt[-1][1]
-		    and push @rslt, $arg;
-	    }
-	} else {
-	    if ( $arg == $rslt[-1] + 1 ) {
-		$rslt[-1] = [ $rslt[-1], $arg ];
-	    } else {
-		$arg > $rslt[-1]
-		    and push @rslt, $arg;
+		if ( $arg == $rslt[-1] + 1 ) {
+		    $rslt[-1] = [ $rslt[-1], $arg ];
+		} else {
+		    $arg > $rslt[-1]
+			and push @rslt, $arg;
+		}
 	    }
 	}
+	shift @rslt;	# Drop the pump priming.
+
+	return join( $separator,
+	    map { ref $_ ?
+		$_->[1] > $_->[0] + 1 ?
+		    "$_->[0]$range_operator$_->[1]" :
+		    @{ $_ } :
+		$_
+	    } @rslt
+	);
+
+    } else {
+	return join $separator, sort { $a <=> $b } @args;
     }
 
-    shift @rslt;	# Drop the pump priming.
-
-    return join( $separator,
-	map { ref $_ ?
-	    $_->[1] > $_->[0] + 1 ?
-		"$_->[0]$range_operator$_->[1]" :
-		@{ $_ } :
-	    $_
-	} @rslt
-    );
 }
 
 #	_trim replaces undefined arguments with '', trims all arguments
