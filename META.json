@@ -45,7 +45,7 @@
             "Scalar::Util" : "1.07",
             "Text::ParseWords" : "0",
             "Time::Local" : "0",
-            "URI::Escape" : "0",
+            "URI" : "0",
             "constant" : "0",
             "perl" : "5.006002",
             "strict" : "0",
@@ -56,11 +56,11 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.065"
+         "version" : "0.066"
       },
       "Astro::SpaceTrack::Parser" : {
          "file" : "lib/Astro/SpaceTrack/Parser.pm",
-         "version" : "0.065"
+         "version" : "0.066"
       }
    },
    "release_status" : "stable",
@@ -72,5 +72,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.065"
+   "version" : "0.066"
 }

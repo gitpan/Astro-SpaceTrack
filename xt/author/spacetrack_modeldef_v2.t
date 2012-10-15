@@ -260,6 +260,14 @@ if ( $rslt->is_success() ) {
       {
          "Default" : "",
          "Extra" : "",
+         "Field" : "OBJECT_TYPE",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "varchar(11)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
          "Field" : "CLASSIFICATION_TYPE",
          "Key" : "",
          "Null" : "NO",
@@ -486,6 +494,14 @@ if ( $rslt->is_success() ) {
       {
          "Default" : "",
          "Extra" : "",
+         "Field" : "OBJECT_TYPE",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "varchar(11)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
          "Field" : "CLASSIFICATION_TYPE",
          "Key" : "",
          "Null" : "NO",
@@ -655,6 +671,156 @@ EOD
 	dump_json( 'tle_latest.got', $got );
 	dump_json( 'tle_latest.expect', $expect );
     };
+}
+
+$rslt = $st->spacetrack_query_v2( qw{
+    basicspacedata modeldef class boxscore
+    } );
+
+ok $rslt->is_success(), 'Fetch modeldef for class boxscore';
+
+if ( $rslt->is_success() ) {
+
+    my $expect = $json->decode( <<'EOD' );
+{
+   "controller" : "basicspacedata",
+   "data" : [
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "COUNTRY",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "varchar(100)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "SPADOC_CD",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "varchar(6)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "ORBITAL_PAYLOAD_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "ORBITAL_ROCKET_BODY_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "ORBITAL_DEBRIS_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "ORBITAL_TOTAL_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "DECAYED_PAYLOAD_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "DECAYED_ROCKET_BODY_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "DECAYED_DEBRIS_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : null,
+         "Extra" : "",
+         "Field" : "DECAYED_TOTAL_COUNT",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "decimal(23,0)"
+      },
+      {
+         "Default" : "0",
+         "Extra" : "",
+         "Field" : "COUNTRY_TOTAL",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "bigint(21)"
+      }
+   ]
+}
+EOD
+    my $got = $json->decode( $rslt->content() );
+    is_deeply $got, $expect, 'Got expected modeldef for class boxscore'
+	or do {
+	diag <<'EOD';
+Writing modeldef we got and we expect to boxscore.got and boxscore.expect
+EOD
+	dump_json( 'boxscore.got', $got );
+	dump_json( 'boxscore.expect', $expect );
+    };
+}
+
+note <<'EOD';
+The following is not really model definition. It is data not available
+under the REST interface, which I want to track for as long as possible.
+EOD
+
+{
+    $rslt = $st->_launch_sites_v2( { json => 0 } );
+
+    ok $rslt->is_success(), 'Fetch version 2 launch sites';
+
+    # Should always succeed, since it's hard-coded, but you never know.
+    if ( $rslt->is_success() ) {
+
+	my $expect = $rslt->content();
+
+	$rslt = $st->_launch_sites_v1( { json => 0 } );
+
+	ok $rslt->is_success(), 'Fetch version 1 launch sites';
+
+	if ( $rslt->is_success() ) {
+
+	    my $got = $rslt->content();
+
+	    is $got, $expect, 'Got expected launch sites'
+		or do {
+		diag <<'EOD';
+Writing launch sites we got and we expect to launch_sites.got and
+launch_sites.expect
+EOD
+		dump_json( 'launch_sites.got', $got );
+		dump_json( 'launch_sites.expect', $expect );
+	    };
+	}
+    }
 }
 
 done_testing;
