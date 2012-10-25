@@ -206,7 +206,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.066';
+our $VERSION = '0.067';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -914,6 +914,12 @@ This is the debris of U.S. communication satellite Iridium 33, created
 by its collision with Cosmos 2251 on February 10 2009. As of February 21
 2010 there are 461 pieces of debris in the data set, up from the 159
 that had been cataloged as of March 9 2009.
+
+=item 2012-044
+
+This is the debris of a Breeze-M upper stage (OID 38746, International
+Designator 2012-044C), which exploded October 16 2012. As of October 25
+there were 81 pieces of debris in the data set.
 
 =back
 
@@ -1632,6 +1638,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 	    'man' => BODY_STATUS_IS_TUMBLING,
 	    'tum' => BODY_STATUS_IS_TUMBLING,
 	    'tum?' => BODY_STATUS_IS_TUMBLING,
+	    'unc'	=> BODY_STATUS_IS_TUMBLING,
 	},
 #	sladen => undef,	# Not needed; done programmatically.
     );
@@ -1695,9 +1702,26 @@ The BODY_STATUS constants are exportable using the :status tag.
 	return $resp;
     }
 
+    # Mung an Iridium status hash to assume all actual Iridium
+    # satellites are good. This is used to prevent bleed-through from
+    # Kelso to McCants, since the latter only reports by exception.
+    sub _iridium_status_assume_good {
+	my ( $self, $rslt ) = @_;
+
+	foreach my $val ( values %{ $rslt } ) {
+	    $val->[1] =~ m/ \A iridium \b /smxi
+		or next;
+	    $val->[2] = '';
+	    $val->[4] = BODY_STATUS_IS_OPERATIONAL;
+	}
+
+	return;
+    }
+
     # Get Iridium status from Mike McCants
     sub _iridium_status_mccants {
 	my ( $self, undef, $rslt ) = @_;	# $fmt arg not used
+	$self->_iridium_status_assume_good( $rslt );
 	my $resp = $self->_get_agent()->get(
 	    $self->getv( 'url_iridium_status_mccants' )
 	);
@@ -1742,6 +1766,8 @@ The BODY_STATUS constants are exportable using the :status tag.
     # Get Iridium status from Rod Sladen.
     sub _iridium_status_sladen {
 	my ( $self, undef, $rslt ) = @_;	# $fmt arg not used
+
+	$self->_iridium_status_assume_good( $rslt );
 
 	my $resp = $self->_get_agent()->get(
 	    $self->getv( 'url_iridium_status_sladen' )
@@ -2321,7 +2347,7 @@ sub _retrieve_v2 {
 	my @batch = splice @args, 0, $RETRIEVAL_SIZE;
 	$rest->{NORAD_CAT_ID} = _stringify_oid_list( {
 		separator	=> ',',
-##		range_operator	=> '--',
+		range_operator	=> '--',
 	    }, @batch );
 
 	my $resp = $self->spacetrack_query_v2(
