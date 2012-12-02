@@ -33,6 +33,7 @@ com
 cpan
 dataset
 designator
+ephemeris
 executables
 exportable
 fallback
@@ -40,6 +41,7 @@ Fengyun
 filename
 globalstar
 glonass
+hoc
 HTTPS
 IDs
 inmarsat
@@ -66,6 +68,7 @@ org
 redirections
 redistributer
 redistributers
+RMS
 satcat
 sladen
 Sladen's

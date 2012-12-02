@@ -64,8 +64,9 @@ it.
 
 Space Track announced August 24 2012 that the bulk data downloads
 provided by the spacetrack() method were deprecated, and would probably
-be eliminated in October 2012. Their rationale is that the new REST
-interface makes prepackaged data no longer necessary.
+be eliminated in October 2012 (though I note that it is still there as
+of November 30 2012). Their rationale is that the new REST interface
+makes prepackaged data no longer necessary.
 
 What I have decided to do about this is to replicate the bulk data
 catalogs with REST queries, to the extent possible. Catalogs which can
@@ -119,21 +120,34 @@ stated otherwise.
 
 =over
 
-=item In version 0.064_01 and before, the retrieve() method (which
-retrieves TLEs for given OIDs) was incapable of returning the common
-name of the body when using version 2 of the Space Track interface.
-Beginning with 0.064_02 this restriction is removed. The
-celestrak() and file() methods still prefer the object name from the
-observing list to the object name supplied by Space Track.
+=item * Retrieval of common names
 
-=item The C<spacetrack()> method (which returns predefined packages of
+In version 0.064_01 and before, the retrieve() method (which retrieves
+TLEs for given OIDs) was incapable of returning the common name of the
+body when using version 2 of the Space Track interface. Beginning with
+0.064_02 this restriction is removed. The celestrak() and file() methods
+still prefer the object name from the observing list to the object name
+supplied by Space Track.
+
+=item * Greater resolution in queries by epoch
+
+If you are using version 2 of the Space Track interface, you can specify
+time as well as date to the C<-start_epoch> and C<-end_epoch> options,
+and they will be honored. Under version 1 this would be truncated to an
+even day.
+
+=item * Bulk data (the C<spacetrack()> method)
+
+The C<spacetrack()> method (which returns predefined packages of
 TLEs) is implemented by REST queries, and those bulk data packages which
 are not reasonably implemented by REST queries are simply not available.
 See
 L<DEPRECATION NOTICE: SPACE TRACK BULK DATA|/DEPRECATION NOTICE: SPACE TRACK BULK DATA>
 above for details.
 
-=item It appears that the idea of what kind of thing an orbiting body is
+=item * Type of orbiting body
+
+It appears that the idea of what kind of thing an orbiting body is
 (payload, rocket body, debris, etc) is being reworked for version 2 of
 the Space Track interface. This means that if you use the C<-exclude>
 option of the C<search_*()> methods you may get different results
@@ -141,14 +155,18 @@ depending on the interface used. A known example is 'Westford Needles',
 which are debris under version 1 of the interface, but payload under
 version 2.
 
-=item The C<-status> search option defaults to 'onorbit' under version 2
+=item * Default for C<-status>
+
+The C<-status> search option defaults to 'onorbit' under version 2
 of the interface. The default under version 1 is still 'all'. This
 change was made because I believe that is what the user generally wants,
 and because the database underlying version 2 of the interface is
 optimized for this sort of query (see below). Basically, I believe that
 if you want a slow query you should have to ask for one specifically.
 
-=item Version 2 of the interface has two separate sources of TLE data.
+=item * Source of TLE data
+
+Version 2 of the interface has two separate sources of TLE data.
 The C<tle_latest> source is optimized for speed, but contains only
 current data. The C<tle> source contains all TLEs back to Sputnik, but
 is slower. The high-level interfaces attempt to select the correct
@@ -156,6 +174,15 @@ source based on the options given them. Options C<-start_epoch>,
 C<-end_epoch> and C<-since_file> cause the C<tle> source do be used, as
 does any value for C<-status> other than C<-status=onorbit>. Otherwise,
 the C<tle_latest> source is used.
+
+=item * Ad-hoc tweaks to version 2 functionality
+
+In some cases, where I have seen (or thought I have seen) glitches
+in the Space Track functionality, I have used environment variables to
+control whether the functionality is used. See the C<SPACETRACK_REST_*>
+entries under L<ENVIRONMENT|/ENVIRONMENT> for details. I will remove
+code using these environment variables when I think the interface is
+stable.
 
 =back
 
@@ -206,7 +233,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.069';
+our $VERSION = '0.069_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -319,6 +346,13 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	radar => {name => 'Radar Calibration'},
 	cubesat => {name => 'CubeSats'},
 	other => {name => 'Other'},
+    },
+    celestrak_supplemental => {
+	gps		=> { name => 'GPS',		rms => 1 },
+	glonass		=> { name => 'Glonass',		rms => 1 },
+	meteosat	=> { name => 'Meteosat',	rms => 1 },
+	intelsat	=> { name => 'Intelsat',	rms => 1 },
+	orbcomm		=> { name => 'Orbcomm (no rms data)' },
     },
     iridium_status => {
 	kelso => {name => 'Celestrak (Kelso)'},
@@ -959,10 +993,11 @@ sub celestrak {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    $self->get( 'space_track_version' ) > 1
+    not $self->{direct}
+	and $self->getv( 'space_track_version' ) > 1
 	and unshift @args, SPACE_TRACK_V2_OPTIONS;
-    @args = _parse_retrieve_args( @args );
-    my $opt = shift @args;
+
+    ( my $opt, @args ) = _parse_retrieve_args( @args );
 
     my $name = shift @args;
     $self->_deprecation_notice( celestrak => $name );
@@ -971,7 +1006,7 @@ sub celestrak {
 	and return $self->_celestrak_direct( $opt, $name );
     my $resp = $self->_get_agent()->get (
 	"http://celestrak.com/SpaceTrack/query/$name.txt");
-    if ( my $check = $self->_celestrak_response_check( $resp, $name ) ) {
+    if ( my $check = $self->_response_check( $resp, celestrak => $name ) ) {
 	return $check;
     }
     $self->_convert_content ($resp);
@@ -981,13 +1016,80 @@ sub celestrak {
 	$self->_celestrak_direct( $opt, $name );
 }
 
+=for html <a name="celestrak_supplemental"></a>
+
+=item $resp = $st->celestrak_supplemental ($name);
+
+This method takes the name of a Celestrak supplemental data set and
+returns an HTTP::Response object whose content is the relevant element
+sets.
+
+These TLE data are B<not> redistributed from Space Track, but are
+derived from publicly available ephemeris data for the satellites in
+question.
+
+The C<-rms> option can be specified to return the RMS data, if it is
+available.
+
+A list of valid names and brief descriptions can be obtained by calling
+C<< $st->names( 'celestrak_supplemental' ) >>. If you have set the
+C<verbose> attribute true (e.g. C<< $st->set (verbose => 1) >>), the
+content of the error response will include this list. Note, however,
+that this list does not determine what can be retrieved; if Dr.  Kelso
+adds a data set, it can be retrieved even if it is not on the list, and
+if he removes one, being on the list won't help.
+
+For more information, see
+L<http://celestrak.com/NORAD/elements/supplemental/>.
+
+=cut
+
+sub celestrak_supplemental {
+    my ($self, @args) = @_;
+    delete $self->{_pragmata};
+
+    ( my $opt, @args ) = _parse_args(
+	[
+	    'rms!' => '(Return RMS data)',
+	], @args );
+
+    my $name = shift @args;
+
+    not $opt->{rms}
+	or $catalogs{celestrak_supplemental}{$name}{rms}
+	or return HTTP::Response->new(
+	    HTTP_PRECONDITION_FAILED,
+	    "$name does not take the -rms option" );
+
+    $self->_deprecation_notice( celestrak_supplemental => $name );
+
+    my $sfx = $opt->{rms} ? 'rms.txt' : 'txt';
+    my $resp = $self->_get_agent()->get (
+	"http://celestrak.com/NORAD/elements/supplemental/$name.$sfx" );
+
+    my $check;
+    $check = $self->_response_check(
+	$resp, celestrak_supplemental => $name, 'direct')
+	and return $check;
+
+    $self->_convert_content( $resp );
+
+    $self->_add_pragmata($resp,
+	'spacetrack-type'	=> ( $opt->{rms} ? 'rms' : 'orbit' ),
+	'spacetrack-source'	=> 'celestrak',
+    );
+
+    $self->_dump_headers( $resp );
+    return $resp;
+}
+
 sub _celestrak_direct {
     my ( $self, $opt, $name ) = @_;
     delete $self->{_pragmata};
 
     my $resp = $self->_get_agent()->get (
 	"http://celestrak.com/NORAD/elements/$name.txt");
-    if (my $check = $self->_celestrak_response_check($resp, $name, 'direct')) {
+    if (my $check = $self->_response_check($resp, celestrak => $name, 'direct')) {
 	return $check;
     }
     $self->_convert_content ($resp);
@@ -1017,12 +1119,12 @@ sub _celestrak_repack_iridium {
 
     my %valid_type = ('text/plain' => 1, 'text/text' => 1);
 
-    sub _celestrak_response_check {
-	my ($self, $resp, $name, @args) = @_;
+    sub _response_check {
+	my ($self, $resp, $source, $name, @args) = @_;
 	unless ($resp->is_success) {
 	    $resp->code == HTTP_NOT_FOUND
 		and return $self->_no_such_catalog(
-		celestrak => $name, @args);
+		$source => $name, @args);
 	    return $resp;
 	}
 	if (my $loc = $resp->header('Content-Location')) {
@@ -1031,7 +1133,7 @@ sub _celestrak_repack_iridium {
 		@args and $msg = "@args; $msg";
 		$1 == HTTP_NOT_FOUND
 		    and return $self->_no_such_catalog(
-		    celestrak => $name, $msg);
+		    $source => $name, $msg);
 		return HTTP::Response->new (+$1, "$msg\n")
 	    }
 	}
@@ -1040,7 +1142,7 @@ sub _celestrak_repack_iridium {
 	    my $msg = 'No Content-Type header found';
 	    @args and $msg = "@args; $msg";
 	    return $self->_no_such_catalog(
-		celestrak => $name, $msg);
+		$source => $name, $msg);
 	};
 	foreach ( _trim( split ',', $type ) ) {
 	    s/ ; .* //smx;
@@ -1049,7 +1151,7 @@ sub _celestrak_repack_iridium {
 	my $msg = "Content-Type: $type";
 	@args and $msg = "@args; $msg";
 	return $self->_no_such_catalog(
-	    celestrak => $name, $msg);
+	    $source => $name, $msg);
     }
 
 }	# End local symbol block.
@@ -2130,9 +2232,10 @@ since all it is doing is returning data kept by this module.
 =cut
 
 sub names {
-    my $self = shift;
+    my ( $self, $name ) = @_;
+    $name = lc $name;
     delete $self->{_pragmata};
-    my $name = lc shift;
+
     $catalogs{$name} or return HTTP::Response (
 	    HTTP_NOT_FOUND, "Data source '$name' not found.");
     my $src = $catalogs{$name};
@@ -2210,14 +2313,15 @@ The legal options are:
    specifies how to sort the data. Legal types are
    'catnum' and 'epoch', with 'catnum' the default.
 
-If you specify either start_epoch or end_epoch, you get data with
-epochs at least equal to the start epoch, but less than the end
-epoch (i.e. the interval is closed at the beginning but open at
-the end). If you specify only one of these, you get a one-day
-interval. Dates are specified either numerically (as a Perl date) or as
-numeric year-month-day (and optional hour, hour:minute, or
-hour:minute:second, but this is ignored), punctuated by any non-numeric
-string.  It is an error to specify an end_epoch before the start_epoch.
+If you specify either start_epoch or end_epoch, you get data with epochs
+at least equal to the start epoch, but less than the end epoch (i.e. the
+interval is closed at the beginning but open at the end). If you specify
+only one of these, you get a one-day interval. Dates are specified
+either numerically (as a Perl date) or as numeric year-month-day (and
+optional hour, hour:minute, or hour:minute:second, but these are ignored
+under the Space Track version 1 interface), punctuated by any
+non-numeric string. It is an error to specify an end_epoch before the
+start_epoch.
 
 If you are passing the options as a hash reference, you must specify
 a value for the boolean options 'descending' and 'last5'. This value is
@@ -2398,6 +2502,9 @@ sub _retrieve_v2 {
 	my %rest = ( class	=> 'tle_latest' );
 
 	if ( $opt->{start_epoch} || $opt->{end_epoch} ) {
+
+=begin comment
+
 	    $rest{EPOCH} = sprintf
 #		'%04d-%02d-%02d %02d:%02d:%02d--%04d-%02d-%02d %02d:%02d:%02d',
 #		@{ $opt->{_start_epoch} }[ 0 .. 5 ],
@@ -2405,6 +2512,13 @@ sub _retrieve_v2 {
 		'%04d-%02d-%02d--%04d-%02d-%02d',
 		@{ $opt->{_start_epoch} }[ 0 .. 2 ],
 		@{ $opt->{_end_epoch} }[ 0 .. 2 ];
+
+=end comment
+
+=cut
+
+	    $rest{EPOCH} = join '--', map { _rest_date( $opt->{$_} ) }
+	    qw{ _start_epoch _end_epoch };
 	    $rest{class} = 'tle';
 	} else {
 	    $rest{sublimit} = $opt->{last5} ? 5 : 1;
@@ -5792,9 +5906,26 @@ sub _search_generic_tabulate {
 # interface's behavior when you have ranges in a list of OIDs
 # stabilizes.
 sub _rest_range_operator {
-    return $ENV{SPACETRACK_REST_RANGE_OPERATOR} ?
+    return _get_env( SPACETRACK_REST_RANGE_OPERATOR => 1 ) ?
 	'--' :
 	undef;
+}
+
+# The following UNDOCUMENTED hack will disappear when the REST
+# interface's behavior with fractional days stabilizes.
+
+sub _rest_date {
+    my ( $time ) = @_;
+    my $fmt = _get_env( SPACETRACK_REST_FRACTIONAL_DATE => 1 ) ?
+    '%04d-%02d-%02d %02d:%02d:%02d' : '%04d-%02d-%02d';
+    return sprintf $fmt, @{ $time };
+}
+
+sub _get_env {
+    my ( $name, $default ) = @_;
+    defined $ENV{$name}
+	and return $ENV{$name};
+    return $default;
 }
 
 #	$swapped = _swap_upper_and_lower( $original );
@@ -6155,6 +6286,30 @@ C<'yehudi:menuhin'> are accepted.
 An explicit username and/or password passed to the new () method
 overrides the environment variable, as does any subsequently-set
 username or password.
+
+=head2 SPACETRACK_REST_RANGE_OPERATOR
+
+This environment variable controls whether the Space Track version 2
+interface (a.k.a. the REST interface) uses OID ranges in its queries.
+A value Perl sees as false (i.e. C<0> or C<''>) causes ranges not to be
+used. A value Perl sees as true (i.e. anything else) causes ranges to be
+used. The default is to use ranges.
+
+Support for this environment variable will be removed when I think
+range support in the REST interface is stable.
+
+=head2 SPACETRACK_REST_FRACTIONAL_DATE
+
+This environment variable controls whether the Space Track version 2
+interface (a.k.a. the REST interface) will query epoch ranges (i.e. the
+C<-start_epoch> and C<-end_epoch> C<retrieve()> options) to
+fractional-day resolution.  A value Perl sees as false (i.e. C<0> or
+C<''>) causes epoch queries to be truncated to even days. A value Perl
+sees as true (i.e. anything else) causes epoch queries to be to the
+nearest second.  The default is to query to the nearest second.
+
+Support for this environment variable will be removed when I think
+fractional-day query support in the REST interface is stable.
 
 =head1 EXECUTABLES
 
