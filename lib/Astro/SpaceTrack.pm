@@ -79,8 +79,17 @@ September 3 2012), as well as the provision of a source of TLE data
 (REST class C<'tle_latest'>) groomed and optimized for the retrieval of
 current data.
 
+As of December 15 2012, the web site for the REST interface provided a
+live link for bulk data downloads (rather than the struck-out text that
+had been there previously). This link led to a page with all the data
+provided by the version 1 interface except MD5 checksums. The data sets
+not easily constructed by queries were provided by pre-generated
+'favorites' entries. 
+
+So at this point this deprecation notice may itself be deprecated.
+
 See the documentation for the C<spacetrack()> method for a list of what
-is and is not included, and
+is included, and
 L<Astro::SpaceTrack::BulkData|Astro::SpaceTrack::BulkData> for the gory
 details.
 
@@ -119,15 +128,6 @@ functionality provided by version 2 of the interface, unless explicitly
 stated otherwise.
 
 =over
-
-=item * Retrieval of common names
-
-In version 0.064_01 and before, the retrieve() method (which retrieves
-TLEs for given OIDs) was incapable of returning the common name of the
-body when using version 2 of the Space Track interface. Beginning with
-0.064_02 this restriction is removed. The celestrak() and file() methods
-still prefer the object name from the observing list to the object name
-supplied by Space Track.
 
 =item * Greater resolution in queries by epoch
 
@@ -233,7 +233,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.069_01';
+our $VERSION = '0.069_02';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -368,7 +368,7 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	},
     },
     spacetrack => [	# Numbered by space_track_version
-	undef,
+	undef,	# No interface version 0
 	{	# Interface version 1 (Original)
 	    md5 => {name => 'MD5 checksums', number => 0, special => 1},
 	    full => {name => 'Full catalog', number => 1},
@@ -393,11 +393,18 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 		# We have to go through satcat to eliminate bodies that
 		# are not on orbit, since tle_latest includes bodies
 		# decayed in the last two years or so
-		satcat	=> {},
+#		satcat	=> {},
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		},
 #		number	=> 1,
 	    },
 	    full_fast => {
+		deprecate	=> 'full',
 		name	=> 'Full catalog, with some objects no longer in orbit',
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		},
 	    },
 	    payloads	=> {
 		name	=> 'All payloads',
@@ -411,71 +418,150 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 		# We have to go through satcat to eliminate bodies that
 		# are not on orbit, since tle_latest includes bodies
 		# decayed in the last two years or so
-		satcat	=> {
-		    PERIOD	=> '1425.6--1454.4'
-		},
+#		satcat	=> {
+#		    PERIOD	=> '1425.6--1454.4'
+#		},
 		# Note that the v2 interface specimen query is
 		#   PERIOD 1430--1450.
 		# The v1 definition is
 		#   MEAN_MOTION 0.99--1.01
 		#   ECCENTRICITY <0.01
+#		tle	=> {
+#		    ECCENTRICITY	=> '<0.01',
+##		    MEAN_MOTION		=> '0.99--1.01',
+#		},
 		tle	=> {
 		    ECCENTRICITY	=> '<0.01',
-#		    MEAN_MOTION		=> '0.99--1.01',
+		    EPOCH		=> '>now-30',
+		    MEAN_MOTION		=> '0.99--1.01',
+		    OBJECT_TYPE		=> 'payload',
 		},
 	    },
 	    geosynchronous_fast => {
-		name	=> 'Geosynchronous satellites, with some bodies no longer in orbit',
+		deprecated	=> 'geosynchronous',
+		name	=> 'Geosynchronous satellites',
 		tle	=> {
 		    ECCENTRICITY	=> '<0.01',
+		    EPOCH		=> '>now-30',
 		    MEAN_MOTION		=> '0.99--1.01',
+		    OBJECT_TYPE		=> 'payload',
 		},
+	    },
+	    navigation => {
+		name => 'Navigation satellites',
+		favorite	=> 'Navigation',
+#		tle	=> {
+#		    favorites	=> 'Navigation',
+#		    EPOCH	=> '>now-30',
+#		},
+#		number => 5,
+	    },
+	    weather => {
+		name => 'Weather satellites',
+		favorite	=> 'Weather',
+#		tle	=> {
+#		    favorites	=> 'Weather',
+#		    EPOCH	=> '>now-30',
+#		},
+#		number => 7,
 	    },
 	    iridium => {
 		name	=> 'Iridium satellites',
-#		number	=> 9,
-		satcat	=> {
-		    OBJECT_TYPE	=> 'PAYLOAD',
-		    SATNAME	=> '~~IRIDIUM',
+#		satcat	=> {
+#		    OBJECT_TYPE	=> 'PAYLOAD',
+#		    SATNAME	=> '~~IRIDIUM',
+#		},
+		tle => {
+		    EPOCH	=> '>now-30',
+		    OBJECT_NAME	=> 'iridium~~',
+		    OBJECT_TYPE	=> 'payload',
 		},
+#		number	=> 9,
 	    },
 	    orbcomm	=> {
 		name	=> 'OrbComm satellites',
+#		satcat	=> [
+#		    {
+#			OBJECT_TYPE	=> 'PAYLOAD',
+#			SATNAME		=> '~~ORBCOMM',
+#		    },
+#		    {
+#			OBJECT_TYPE	=> 'PAYLOAD',
+#			SATNAME		=> '~~VESSELSAT',
+#		    },
+#		],
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		    OBJECT_NAME	=> 'ORBCOMM~~,VESSELSAT~~',
+		    OBJECT_TYPE	=> 'payload',
+		},
 #		number	=> 11,
-		satcat	=> [
-		    {
-			OBJECT_TYPE	=> 'PAYLOAD',
-			SATNAME		=> '~~ORBCOMM',
-		    },
-		    {
-			OBJECT_TYPE	=> 'PAYLOAD',
-			SATNAME		=> '~~VESSELSAT',
-		    },
-		],
 	    },
 	    globalstar => {
 		name	=> 'Globalstar satellites',
-#		number	=> 13,
-		satcat	=> {
-		    OBJECT_TYPE => 'PAYLOAD',
-		    SATNAME	=> '~~GLOBALSTAR',
+#		satcat	=> {
+#		    OBJECT_TYPE => 'PAYLOAD',
+#		    SATNAME	=> '~~GLOBALSTAR',
+#		},
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		    OBJECT_NAME	=> 'globalstar~~',
+		    OBJECT_TYPE	=> 'payload',
 		},
+#		number	=> 13,
 	    },
 	    intelsat => {
 		name	=> 'Intelsat satellites',
-#		number	=> 15,
-		satcat	=> {
-		    OBJECT_TYPE => 'PAYLOAD',
-		    SATNAME	=> '~~INTELSAT',
+#		satcat	=> {
+#		    OBJECT_TYPE => 'PAYLOAD',
+#		    SATNAME	=> '~~INTELSAT',
+#		},
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		    OBJECT_NAME	=> 'intelsat~~',
+		    OBJECT_TYPE	=> 'payload',
 		},
+#		number	=> 15,
 	    },
 	    inmarsat => {
 		name	=> 'Inmarsat satellites',
-#		number	=> 17,
-		satcat	=> {
-		    OBJECT_TYPE => 'PAYLOAD',
-		    SATNAME	=> '~~INMARSAT',
+#		satcat	=> {
+#		    OBJECT_TYPE => 'PAYLOAD',
+#		    SATNAME	=> '~~INMARSAT',
+#		},
+		tle	=> {
+		    EPOCH	=> '>now-30',
+		    OBJECT_NAME	=> 'inmarsat~~',
+		    OBJECT_TYPE	=> 'payload',
 		},
+#		number	=> 17,
+	    },
+	    amateur => {
+		favorite	=> 'Amateur',
+		name => 'Amateur Radio satellites',
+#		tle	=> {
+#		    favorites	=> 'Amateur',
+#		    EPOCH	=> '>now-30',
+#		},
+#		number => 19,
+	    },
+	    visible => {
+		favorite	=> 'Visible',
+		name => 'Visible satellites',
+#		tle	=> {
+#		    favorites	=> 'Visible',
+#		    EPOCH	=> '>now-30',
+#		},
+#		number => 21,
+	    },
+	    special => {
+		favorite	=> 'Special_interest',
+		name => 'Special interest satellites',
+#		tle	=> {
+#		    favorites	=> 'Special_interest',
+#		    EPOCH	=> '>now-30',
+#		},
+#		number => 23,
 	    },
 	},
     ],
@@ -1370,6 +1456,81 @@ sub _country_names_v2 {
 }
 
 
+=for html <a name="favorite"></a>
+
+=item $resp = $st->favorite( $name )
+
+This method takes the name of a C<favorite> set up by the user on the
+Space Track web site, and returns the bodies specified.
+
+Although both version 1 and version 2 of the Space Track interface
+provide favorites, only the version 2 interface is supported by this
+method. If you call this method with attribute C<'space_track_version'>
+set to C<1>, an exception will be thrown.
+
+Under the version 2 interface, the 'global' favorites (e.g.
+C<'Navigation'>, C<'Weather'>, and so on) may also be fetched.
+Additionally, the C<-json> option may be specified, either in
+command-line format or as a leading hash reference. For example,
+
+ $resp = $st->favorite( '-json', 'Weather' );
+ $resp = $st->favorite( { json => 1 }, 'Weather' );
+
+both work.
+
+=cut
+
+{
+    my @dispatch = ( undef, \&_favorite_v1, \&_favorite_v2 );
+
+    sub favorite {
+	goto $dispatch[ $_[0]{space_track_version} ];
+    }
+}
+
+sub _favorite_v1 {
+    croak 'favorite() not implemented under the Space Track version 1 interface';
+}
+
+sub _favorite_v2 {
+    my ($self, @args) = @_;
+    delete $self->{_pragmata};
+
+    ( my $opt, @args ) = _parse_args(
+	[
+	    'json!'	=> 'Return data in JSON format',
+	], @args );
+
+    @args
+	and defined $args[0]
+	or croak 'Must specify a favorite';
+    @args > 1
+	and croak 'Can not specify more than one favorite';
+    # https://beta.space-track.org/basicspacedata/query/class/tle_latest/favorites/Visible/ORDINAL/1/EPOCH/%3Enow-30/format/3le
+
+    my $rest = $self->_convert_retrieve_options_to_rest( $opt );
+    $rest->{favorites}	= $args[0];
+    $rest->{EPOCH}	= '>now-30';
+    delete $rest->{orderby};
+
+    my $resp = $self->spacetrack_query_v2(
+	basicspacedata	=> 'query',
+	_sort_rest_arguments( $rest )
+    );
+
+    $resp->is_success()
+	or return $resp;
+
+    _spacetrack_v2_response_is_empty( $resp )
+	and return HTTP::Response->new(
+	    HTTP_NOT_FOUND,
+	    "Favorite '$args[0]' not found"
+	);
+
+    return $resp;
+}
+
+
 =for html <a name="file"></a>
 
 =item $resp = $st->file ($name)
@@ -2038,6 +2199,7 @@ sub _launch_sites_v1 {
         [ 'XIC'    => 'XI CHANG LAUNCH FACILITY' ],
         [ 'XSC'    => 'Xichang Space Center, China' ],
         [ 'YAVNE'  => 'Yavne, Israel' ],
+        [ 'YUN'    => 'Yunsong, DPRK' ],
     );
 
     my $no_json;
@@ -3976,21 +4138,31 @@ Under C<space_track_version == 2>, the following catalogs are available:
     Name            Description
     full            Full catalog
     full_fast       Full catalog, faster but less
-                        accurate query
+                        accurate query (DEPRECATED)
     payloads        All payloads
+    navigation      Navigation satellites
+    weather         Weather satellites
     geosynchronous  Geosynchronous bodies
     geosynchronous_fast Geosynchronous bodies, faster
-                        but less accurate query
+                        but less accurate query (DEPRECATED)
     iridium         Iridium satellites
     orbcomm         OrbComm satellites
     globalstar      Globalstar satellites
     intelsat        Intelsat satellites
     inmarsat        Inmarsat satellites
+    amateur         Amateur Radio satellites
+    visible         Visible satellites
+    special         Special satellites
 
-The C<*_fast> queries are, as of this writing, much faster than their
-not-fast variants. But they gain speed by omitting a check on whether or
-not the body is still in orbit. These queries are not supported, and may
-be retracted without notice if the speed difference becomes tolerable.
+The C<*_fast> queries are, as of version 0.069_02, the same
+as their un-fast versions. The queries are those implemented on the
+Space Track web site, and B<may> included recently-decayed satellites.
+
+The C<*_fast> queries are also deprecated as of version
+0.069_02. Because these were always considered unsupported,
+the deprecation cycle will be accelerated. They will C<carp()> on every
+use, and six months after release 0.070 will produce fatal errors. Six
+months after they become fatal, they will be removed completely.
 
 Retrieval by number is unsupported under version 2 of the interface.
 When retrieving a bulk catalog by name, the value of the C<with_names>
@@ -4110,7 +4282,9 @@ Requested file  doesn't exist");history.go(-1);
 	    'content-type' => 'text/plain',
 ##	    'content-length' => length ($resp->content),
 	);
-	$self->_convert_content ($resp);
+
+	$self->_convert_content( $resp );
+
 	$self->_add_pragmata($resp,
 	    'spacetrack-type' => 'orbit',
 	    'spacetrack-source' => 'spacetrack',
@@ -4144,7 +4318,9 @@ sub _spacetrack_v2 {
     my ( $self, @args ) = @_;
 
     my ( $opt, $catalog ) = _parse_args(
-	SPACE_TRACK_V2_OPTIONS, @args );
+	[
+	    'json!'	=> 'Return data in JSON format',
+	], @args );
 
     my $format = $self->getv( 'with_name' ) ? '3le' : 'tle';
 
@@ -4152,9 +4328,16 @@ sub _spacetrack_v2 {
 	and my $info = $catalogs{spacetrack}[2]{$catalog}
 	or return $self->_no_such_catalog( spacetrack => 2, $catalog );
 
+    defined $info->{deprecate}
+	and carp "Catalog '$catalog' is deprecated in favor of '$info->{deprecate}'";
+
+    defined $info->{favorite}
+	and return $self->_favorite_v2( $opt, $info->{favorite} );
+
     my %retrieve_opt = %{
 	$self->_convert_retrieve_options_to_rest( $opt )
     };
+
     $info->{tle}
 	and @retrieve_opt{ keys %{ $info->{tle} } } =
 	    values %{ $info->{tle} };
@@ -4203,6 +4386,8 @@ sub _spacetrack_v2 {
 
 	$rslt->is_success()
 	    or return $rslt;
+
+	$self->_convert_content( $rslt );
 
 	$self->_add_pragmata( $rslt,
 	    'spacetrack-type' => 'orbit',
@@ -5900,6 +6085,11 @@ sub _search_generic_tabulate {
 
 	return @rslt;
     }
+}
+
+sub _spacetrack_v2_response_is_empty {
+    my ( $resp ) = @_;
+    return $resp->content() =~ m/ \A \s* (?: [[] \s* []] )? \s* \z /smx;
 }
 
 # The following UNDOCUMENTED hack will disappear when the REST
