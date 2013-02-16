@@ -152,14 +152,6 @@ if ( $rslt->is_success() ) {
          "Type" : "float"
       },
       {
-         "Default" : null,
-         "Extra" : "",
-         "Field" : "RCSSOURCE",
-         "Key" : "",
-         "Null" : "YES",
-         "Type" : "char(3)"
-      },
-      {
          "Default" : "0",
          "Extra" : "",
          "Field" : "FILE",
@@ -198,6 +190,30 @@ if ( $rslt->is_success() ) {
          "Key" : "",
          "Null" : "NO",
          "Type" : "enum('Y','N')"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "OBJECT_NAME",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "char(25)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "OBJECT_ID",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "char(12)"
+      },
+      {
+         "Default" : "0",
+         "Extra" : "",
+         "Field" : "OBJECT_NUMBER",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "mediumint(8) unsigned"
       }
    ]
 }
@@ -407,7 +423,7 @@ if ( $rslt->is_success() ) {
          "Field" : "TLE_LINE0",
          "Key" : "",
          "Null" : "NO",
-         "Type" : "varchar(27)"
+         "Type" : "varchar(62)"
       },
       {
          "Default" : "",
@@ -424,6 +440,22 @@ if ( $rslt->is_success() ) {
          "Key" : "",
          "Null" : "NO",
          "Type" : "char(71)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "OBJECT_ID",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "varchar(11)"
+      },
+      {
+         "Default" : "0",
+         "Extra" : "",
+         "Field" : "OBJECT_NUMBER",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "mediumint(8) unsigned"
       }
    ]
 }
@@ -658,6 +690,22 @@ if ( $rslt->is_success() ) {
          "Key" : "",
          "Null" : "NO",
          "Type" : "char(71)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "OBJECT_ID",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "varchar(11)"
+      },
+      {
+         "Default" : "0",
+         "Extra" : "",
+         "Field" : "OBJECT_NUMBER",
+         "Key" : "",
+         "Null" : "YES",
+         "Type" : "mediumint(8) unsigned"
       }
    ]
 }
@@ -699,7 +747,7 @@ if ( $rslt->is_success() ) {
          "Field" : "SPADOC_CD",
          "Key" : "",
          "Null" : "YES",
-         "Type" : "varchar(6)"
+         "Type" : "varchar(9)"
       },
       {
          "Default" : null,
@@ -787,40 +835,46 @@ EOD
     };
 }
 
-note <<'EOD';
-The following is not really model definition. It is data not available
-under the REST interface, which I want to track for as long as possible.
-EOD
+$rslt = $st->spacetrack_query_v2( qw{
+    basicspacedata modeldef class launch_site
+    } );
 
+ok $rslt->is_success(), 'Fetch modeldef for class launch_site';
+
+if ( $rslt->is_success() ) {
+
+    my $expect = $json->decode( <<'EOD' );
 {
-    $rslt = $st->_launch_sites_v2( { json => 0 } );
-
-    ok $rslt->is_success(), 'Fetch version 2 launch sites';
-
-    # Should always succeed, since it's hard-coded, but you never know.
-    if ( $rslt->is_success() ) {
-
-	my $got = $rslt->content();
-
-	$rslt = $st->_launch_sites_v1( { json => 0 } );
-
-	ok $rslt->is_success(), 'Fetch version 1 launch sites';
-
-	if ( $rslt->is_success() ) {
-
-	    my $expect = $rslt->content();
-
-	    is $expect, $got, 'Got expected launch sites'
-		or do {
-		diag <<'EOD';
-Writing launch sites we got and we expect to launch_sites.got and
-launch_sites.expect
+   "controller" : "basicspacedata",
+   "data" : [
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "SITE_CODE",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "char(5)"
+      },
+      {
+         "Default" : "",
+         "Extra" : "",
+         "Field" : "LAUNCH_SITE",
+         "Key" : "",
+         "Null" : "NO",
+         "Type" : "char(64)"
+      }
+   ]
+}
 EOD
-		dump_data( 'launch_sites.expect', $expect );
-		dump_data( 'launch_sites.got', $got );
-	    };
-	}
-    }
+    my $got = $json->decode( $rslt->content() );
+    is_deeply $got, $expect, 'Got expected modeldef for class launch_site'
+	or do {
+	diag <<'EOD';
+Writing modeldef we got and we expect to launch_site.got and launch_site.expect
+EOD
+	dump_data( 'launch_site.got', $got );
+	dump_data( 'launch_site.expect', $expect );
+    };
 }
 
 done_testing;

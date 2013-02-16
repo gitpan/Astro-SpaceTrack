@@ -1,7 +1,7 @@
 ^_build/
 ^Astro-SpaceTrack-
 ^blib/
-^box_score\.(expect|got)$
+^boxscore\.(expect|got)$
 ^Build$
 ^Changes_
 ^cover_db/
@@ -9,7 +9,7 @@ CVS/
 ^foo/
 ^html/
 ^kelso\.(expect|got)$
-^launch_sites\.(expect|got)$
+^launch_site\.(expect|got)$
 ^Makefile$
 ^MANIFEST\.
 ^mccants\.(expect|got)$

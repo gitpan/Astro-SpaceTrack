@@ -15,7 +15,7 @@
 use strict;
 use warnings;
 
-our $VERSION = '0.070';
+our $VERSION = '0.071';
 
 use Astro::SpaceTrack qw{shell};
 use Getopt::Long;
@@ -62,7 +62,7 @@ can also be piped in, or redirected in from a file.
 
 The one and only option is -filter, which sets the 'filter' attribute
 of the C<Astro::SpaceTrack> object. This prevents informational output
-(such as the banner and 'OK' messages) to stdout. The idea is that
+(such as the banner and 'OK' messages) to STDOUT. The idea is that
 with -filter asserted, you can pipe the output to another program,
 and only have orbital elements written to the pipe.
 
@@ -82,7 +82,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2005-2006, 2010-2012 by Thomas R. Wyant, III
+Copyright (C) 2005-2006, 2010-2013 by Thomas R. Wyant, III
 (F<wyant at cpan dot org>).
 
 This program is free software; you can redistribute it and/or modify it

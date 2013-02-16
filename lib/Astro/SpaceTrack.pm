@@ -52,13 +52,12 @@ C<celestrak()> C<'sts'> catalog and the C<spaceflight()> C<'SHUTTLE'>
 argument, because of the end of the Space Shuttle program on July 21
 2011.
 
-With the first release on or after January 22 2013, all uses of
-C<celestrak()> C<'sts'> or C<spaceflight()> C<'SHUTTLE'> will generate
-an exception.
+With this release (0.071), all uses of C<celestrak()> C<'sts'> or
+C<spaceflight()> C<'SHUTTLE'> will generate an exception.
 
-Six further months later, the deprecated functionality will be removed.
-This means (probably) you will get a C<404> error when you try to use
-it.
+With the first release on or after August 16 2013, the deprecated
+functionality will be removed.  This means (probably) you will get a
+C<404> error when you try to use it.
 
 =head1 DEPRECATION NOTICE: SPACE TRACK BULK DATA
 
@@ -86,7 +85,8 @@ provided by the version 1 interface except MD5 checksums. The data sets
 not easily constructed by queries were provided by pre-generated
 'favorites' entries. 
 
-So at this point this deprecation notice may itself be deprecated.
+So though the deprecation is technically correct, the actual data are
+still available.
 
 See the documentation for the C<spacetrack()> method for a list of what
 is included, and
@@ -233,7 +233,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.070';
+our $VERSION = '0.071';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1121,7 +1121,7 @@ A list of valid names and brief descriptions can be obtained by calling
 C<< $st->names( 'celestrak_supplemental' ) >>. If you have set the
 C<verbose> attribute true (e.g. C<< $st->set (verbose => 1) >>), the
 content of the error response will include this list. Note, however,
-that this list does not determine what can be retrieved; if Dr.  Kelso
+that this list does not determine what can be retrieved; if Dr. Kelso
 adds a data set, it can be retrieved even if it is not on the list, and
 if he removes one, being on the list won't help.
 
@@ -2164,95 +2164,61 @@ sub _launch_sites_v1 {
 }
 
 {
-    # The following generated from version 1 results by
-    # foo/launch_sites.
     my $headings = [ 'Abbreviation', 'Country/Organization' ];
-    my @data = (
-        [ 'AFETR'  => 'AIR FORCE EASTERN TEST RANGE' ],
-        [ 'AFWTR'  => 'AIR FORCE WESTERN TEST RANGE' ],
-        [ 'CAS'    => 'Pegasus launched from Canary Islands Air Space' ],
-        [ 'ERAS'   => 'Pegasus launched from Eastern Range Air Space' ],
-        [ 'FRGUI'  => 'FRENCH GUIANA' ],
-        [ 'HGSTR'  => 'HAMMA GUIRA SPACE TRACK RANGE' ],
-        [ 'JSC'    => 'Jiuquan Satellite Launch Center, China' ],
-        [ 'KODAK'  => 'Kodiak Island, Alaska' ],
-        [ 'KSCUT'  => 'KAGOSHIMA SPACE CENTER UNIVERSITY OF TOKYO' ],
-        [ 'KWAJ'   => 'Kwajalein' ],
-        [ 'KYMTR'  => 'KAPUSTIN YAR MISSILE AND SPACE COMPLEX' ],
-        [ 'OREN'   => 'Orenburg, Russia' ],
-        [ 'PKMTR'  => 'PLESETSK MISSILE AND SPACE COMPLEX' ],
-        [ 'SADOL'  => 'Submarine Launch from Barents Sea, Russia' ],
-        [ 'SCTMR'  => 'JIUQUAN' ],
-        [ 'SEAL'   => 'SEA LAUNCH' ],
-        [ 'SEM'    => 'Semnan, Iran' ],
-        [ 'SNMLP'  => 'SAN MARCO LAUNCH PLATFORM' ],
-        [ 'SRI'    => 'SIRHARIKOTA' ],
-        [ 'SVOB'   => 'Svobodny, Russia' ],
-        [ 'TCS'    => 'UNKNOWN' ],
-        [ 'TNSTA'  => 'TANEGASHIMA SPACE CENTER' ],
-        [ 'TSC'    => 'Taiyaun Space Center, China' ],
-        [ 'TTMTR'  => 'TYURATAM MISSILE AND SPACE COMPLEX' ],
-        [ 'WLPIS'  => 'WALLOPS ISLAND' ],
-        [ 'WOMRA'  => 'WOOMERA' ],
-        [ 'WRAS'   => 'Pegasus launched from Western Range Air Space' ],
-        [ 'WUZ'    => 'TAIYUAN' ],
-        [ 'XIC'    => 'XI CHANG LAUNCH FACILITY' ],
-        [ 'XSC'    => 'Xichang Space Center, China' ],
-        [ 'YAVNE'  => 'Yavne, Israel' ],
-        [ 'YUN'    => 'Yunsong, DPRK' ],
-    );
-
-    my $no_json;
-    my %struct;
-    my @json;
+    my @fields = qw{ SITE_CODE LAUNCH_SITE };
 
     sub _launch_sites_v2 {
 	my ( $self, @args ) = @_;
-
-	delete $self->{_pragmata};
 
 	( my $opt, @args ) = _parse_args(
 	    [
 		'json!'	=> 'Return data in JSON format',
 	    ], @args );
 
-	my $resp;
+	my $resp = $self->spacetrack_query_v2( qw{
+	    basicspacedata query class launch_site
+	    format json },
+		orderby	=> 'SITE_CODE asc',
+	    qw{ predicates all
+	} );
+	$resp->is_success()
+	    or return $resp;
 
-	if ( $opt->{json} ) {
-	    my $inx = $self->getv( 'pretty' ) ? 1 : 0;
+	my $data;
 
-	    if ( ! %struct ) {
-		foreach my $datum ( @data ) {
-		    $struct{$datum->[0]} = $datum->[1];
-		}
+	if ( ! $opt->{json} ) {
+
+	    $data = $self->_get_json_object()->decode( $resp->content() );
+
+	    my $content;
+	    foreach my $row ( $headings ) {
+		$content .= join( "\t", @{ $row } ) . "\n";
+	    }
+	    foreach my $datum ( @{ $data } ) {
+		$content .= join( "\t", map { $datum->{$_} } @fields ) . "\n";
 	    }
 
-	    if ( ! defined $json[$inx] ) {
-		$json[$inx] = $self->_get_json_object()
-		    ->encode( \%struct );
-	    }
-
-	    $resp = HTTP::Response->new( HTTP_OK, undef, undef,
-		$json[$inx] );
-
-	} else {
-
-	    if ( ! defined $no_json ) {
-		foreach my $datum ( $headings, @data ) {
-		    $no_json .= join( "\t", @{ $datum } ) . "\n";
-		}
-	    }
-
-	    $resp = HTTP::Response->new( HTTP_OK, undef, undef, $no_json );
+	    $resp = HTTP::Response->new (HTTP_OK, undef, undef, $content);
 	}
 
-	$self->_add_pragmata( $resp,
-	    'spacetrack-type'	=> 'launch_sites',
-	    'spacetrack-source'	=> 'spacetrack',
-	    'spacetrack-interface'	=> 2,
+	$self->_add_pragmata($resp,
+	    'spacetrack-type' => 'launch_sites',
+	    'spacetrack-source' => 'spacetrack',
+	    'spacetrack-interface' => 2,
 	);
 
-	return $resp;
+	wantarray
+	    or return $resp;
+
+	my @table;
+	foreach my $row ( @{ $headings } ) {
+	    push @table, [ @{ $row } ];
+	}
+	$data ||= $self->_get_json_object()->decode( $resp->content() );
+	foreach my $datum ( @{ $data } ) {
+	    push @table, [ map { $datum->{$_} } @fields ];
+	}
+	return ( $resp, \@table );
     }
 }
 
@@ -2878,7 +2844,6 @@ sub _retrieve_v2 {
 		my $info = $search_info{$body->{NORAD_CAT_ID}};
 		if ( $opt->{json} ) {
 		    if ( $opt->{rcs} ) {
-			$body->{RCSSOURCE} = $info->{RCSSOURCE};
 			$body->{RCSVALUE} = $info->{RCSVALUE};
 		    }
 		} else {
@@ -4322,8 +4287,6 @@ sub _spacetrack_v2 {
 	    'json!'	=> 'Return data in JSON format',
 	], @args );
 
-    my $format = $self->getv( 'with_name' ) ? '3le' : 'tle';
-
     defined $catalog
 	and my $info = $catalogs{spacetrack}[2]{$catalog}
 	or return $self->_no_such_catalog( spacetrack => 2, $catalog );
@@ -4869,10 +4832,10 @@ sub _check_cookie_generic {
 
     my %deprecate = (
 	celestrak => {
-	    sts	=> 2,
+	    sts	=> 3,
 	},
 	spaceflight => {
-	    shuttle	=> 2,
+	    shuttle	=> 3,
 	},
     );
 
@@ -6544,7 +6507,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2005-2012 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
+Copyright 2005-2013 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 LICENSE
 
