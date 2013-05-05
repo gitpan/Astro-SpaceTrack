@@ -181,7 +181,7 @@ if ( $rslt->is_success() ) {
          "Field" : "LAUNCH_PIECE",
          "Key" : "",
          "Null" : "NO",
-         "Type" : "char(3)"
+         "Type" : "varchar(3)"
       },
       {
          "Default" : "N",
@@ -270,8 +270,8 @@ if ( $rslt->is_success() ) {
          "Extra" : "",
          "Field" : "OBJECT_NAME",
          "Key" : "",
-         "Null" : "YES",
-         "Type" : "char(25)"
+         "Null" : "NO",
+         "Type" : "varchar(60)"
       },
       {
          "Default" : null,
@@ -520,8 +520,8 @@ if ( $rslt->is_success() ) {
          "Extra" : "",
          "Field" : "OBJECT_NAME",
          "Key" : "",
-         "Null" : "YES",
-         "Type" : "char(25)"
+         "Null" : "NO",
+         "Type" : "varchar(60)"
       },
       {
          "Default" : null,
