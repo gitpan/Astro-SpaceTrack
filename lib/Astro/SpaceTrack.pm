@@ -63,15 +63,20 @@ C<404> error when you try to use it.
 
 On June 14 2013 Space Track informed users that the version 1 API would
 be taken out of service July 16 2013 at 11:00 PST, which I take to be
-18:00 UT. Therefore, effective with version 0.075 there
-will be a warning every time the space_track_version attribute is set to
-1, and effective the first release after July 16 2013 at 18:00 UT, this
-warning will become an exception.
+18:00 UT. Therefore, effective with version 0.075 there will be a
+warning every time the space_track_version attribute is set to 1, and
+effective the first release after July 16 2013 at 18:00 UT, this warning
+will become an exception.
 
 The warning can not be suppressed by C<no warnings qw{ deprecated };>
 because of the imminence of the removal of the functionality. If you
 really must suppress the warnings, you will need to make use of
 C<$SIG{__WARN__}>, properly localized.
+
+Effective with version 0.076, the version 1 API is
+unsupported. This is because the tests must be retracted before Space
+Track takes the API out of service. The version 1 code will not be
+removed, though, until after Space Track takes the API out of service.
 
 =head1 SPACE TRACK REST API
 
@@ -186,7 +191,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.075';
+our $VERSION = '0.076';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -4220,7 +4225,7 @@ sub _spacetrack_v2 {
 	or return $self->_no_such_catalog( spacetrack => 2, $catalog );
 
     defined $info->{deprecate}
-	and carp "Catalog '$catalog' is deprecated in favor of '$info->{deprecate}'";
+	and croak "Catalog '$catalog' is deprecated in favor of '$info->{deprecate}'";
 
     defined $info->{favorite}
 	and return $self->_favorite_v2( $opt, $info->{favorite} );
@@ -6379,8 +6384,9 @@ A value Perl sees as false (i.e. C<0> or C<''>) causes ranges not to be
 used. A value Perl sees as true (i.e. anything else) causes ranges to be
 used. The default is to use ranges.
 
-Support for this environment variable will be removed when I think
-range support in the REST interface is stable.
+Support for this environment variable will be removed the first release
+after January 1 2014, since I think range support in the REST interface
+is stable.
 
 =head2 SPACETRACK_REST_FRACTIONAL_DATE
 
@@ -6392,8 +6398,9 @@ C<''>) causes epoch queries to be truncated to even days. A value Perl
 sees as true (i.e. anything else) causes epoch queries to be to the
 nearest second.  The default is to query to the nearest second.
 
-Support for this environment variable will be removed when I think
-fractional-day query support in the REST interface is stable.
+Support for this environment variable will be removed the first release
+after January 1 2014, since I think fractional-day query support in the
+REST interface is stable.
 
 =head1 EXECUTABLES
 
