@@ -4,7 +4,7 @@
       "Tom Wyant (wyant at cpan dot org)"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "Module::Build version 0.4005, CPAN::Meta::Converter version 2.131560",
+   "generated_by" : "Module::Build version 0.4007, CPAN::Meta::Converter version 2.132140",
    "license" : [
       "perl_5"
    ],
@@ -29,11 +29,9 @@
       "runtime" : {
          "requires" : {
             "Carp" : "0",
-            "Compress::Zlib" : "0",
             "Data::Dumper" : "0",
             "Exporter" : "0",
             "Getopt::Long" : "0",
-            "HTML::Parser" : "0",
             "HTTP::Response" : "0",
             "HTTP::Status" : "6.03",
             "IO::File" : "0",
@@ -56,14 +54,10 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.077"
-      },
-      "Astro::SpaceTrack::Parser" : {
-         "file" : "lib/Astro/SpaceTrack/Parser.pm",
-         "version" : "0.077"
+         "version" : "0.077_01"
       }
    },
-   "release_status" : "stable",
+   "release_status" : "testing",
    "resources" : {
       "bugtracker" : {
          "web" : "https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack"
@@ -72,5 +66,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.077"
+   "version" : "0.077_01"
 }
