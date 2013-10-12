@@ -112,7 +112,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.080';
+our $VERSION = '0.080_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -173,18 +173,20 @@ use constant DUMP_COOKIE => 0x08;	# Dump cookies.
 use constant DUMP_HEADERS => 0x10;	# Dump headers.
 use constant DUMP_CONTENT => 0x20;	# Dump content
 
-use constant SPACE_TRACK_V2_OPTIONS => [
-    'since_file=i'
-    		=> '(Return only results added after the given file number)',
-    'json!'	=> '(Return TLEs in JSON format)',
+# These are the Space Track version 1 retrieve Getopt::Long option
+# specifications, and the descriptions of each option. These need to
+# survive the returement of Version 1 as a separate entity because I
+# emulated them in the celestrak() and spaceflight() methods. I'm _NOT_
+# emulating the options added in version 2 because they require parsing
+# the TLE.
+use constant CLASSIC_RETRIEVE_OPTIONS => [
+    descending => '(direction of sort)',
+    'end_epoch=s' => 'date',
+    last5 => '(ignored if -start_epoch or -end_epoch specified)',
+    'sort=s' =>
+	"type ('catnum' or 'epoch', with 'catnum' the default)",
+    'start_epoch=s' => 'date',
 ];
-
-# TODO get rid of this hack once the version 1 interface is retired. The
-# reason for the hack is that I want to have the default status to be
-# 'onorbit' under the REST interface, but do not want to change the
-# default under the version 1 interface.
-
-our $DEFAULT_SPACE_TRACK_STATUS = 'all';
 
 my %catalogs = (	# Catalog names (and other info) for each source.
     celestrak => {
@@ -326,27 +328,15 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    navigation => {
 		name => 'Navigation satellites',
 		favorite	=> 'Navigation',
-#		tle	=> {
-#		    favorites	=> 'Navigation',
-#		    EPOCH	=> '>now-30',
-#		},
 #		number => 5,
 	    },
 	    weather => {
 		name => 'Weather satellites',
 		favorite	=> 'Weather',
-#		tle	=> {
-#		    favorites	=> 'Weather',
-#		    EPOCH	=> '>now-30',
-#		},
 #		number => 7,
 	    },
 	    iridium => {
 		name	=> 'Iridium satellites',
-#		satcat	=> {
-#		    OBJECT_TYPE	=> 'PAYLOAD',
-#		    SATNAME	=> '~~IRIDIUM',
-#		},
 		tle => {
 		    EPOCH	=> '>now-30',
 		    OBJECT_NAME	=> 'iridium~~',
@@ -356,16 +346,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    },
 	    orbcomm	=> {
 		name	=> 'OrbComm satellites',
-#		satcat	=> [
-#		    {
-#			OBJECT_TYPE	=> 'PAYLOAD',
-#			SATNAME		=> '~~ORBCOMM',
-#		    },
-#		    {
-#			OBJECT_TYPE	=> 'PAYLOAD',
-#			SATNAME		=> '~~VESSELSAT',
-#		    },
-#		],
 		tle	=> {
 		    EPOCH	=> '>now-30',
 		    OBJECT_NAME	=> 'ORBCOMM~~,VESSELSAT~~',
@@ -375,10 +355,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    },
 	    globalstar => {
 		name	=> 'Globalstar satellites',
-#		satcat	=> {
-#		    OBJECT_TYPE => 'PAYLOAD',
-#		    SATNAME	=> '~~GLOBALSTAR',
-#		},
 		tle	=> {
 		    EPOCH	=> '>now-30',
 		    OBJECT_NAME	=> 'globalstar~~',
@@ -388,10 +364,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    },
 	    intelsat => {
 		name	=> 'Intelsat satellites',
-#		satcat	=> {
-#		    OBJECT_TYPE => 'PAYLOAD',
-#		    SATNAME	=> '~~INTELSAT',
-#		},
 		tle	=> {
 		    EPOCH	=> '>now-30',
 		    OBJECT_NAME	=> 'intelsat~~',
@@ -401,10 +373,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    },
 	    inmarsat => {
 		name	=> 'Inmarsat satellites',
-#		satcat	=> {
-#		    OBJECT_TYPE => 'PAYLOAD',
-#		    SATNAME	=> '~~INMARSAT',
-#		},
 		tle	=> {
 		    EPOCH	=> '>now-30',
 		    OBJECT_NAME	=> 'inmarsat~~',
@@ -415,28 +383,16 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    amateur => {
 		favorite	=> 'Amateur',
 		name => 'Amateur Radio satellites',
-#		tle	=> {
-#		    favorites	=> 'Amateur',
-#		    EPOCH	=> '>now-30',
-#		},
 #		number => 19,
 	    },
 	    visible => {
 		favorite	=> 'Visible',
 		name => 'Visible satellites',
-#		tle	=> {
-#		    favorites	=> 'Visible',
-#		    EPOCH	=> '>now-30',
-#		},
 #		number => 21,
 	    },
 	    special => {
 		favorite	=> 'Special_interest',
 		name => 'Special interest satellites',
-#		tle	=> {
-#		    favorites	=> 'Special_interest',
-#		    EPOCH	=> '>now-30',
-#		},
 #		number => 23,
 	    },
 	},
@@ -898,11 +854,9 @@ sub celestrak {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    not $self->{direct}
-	and $self->getv( 'space_track_version' ) > 1
-	and unshift @args, SPACE_TRACK_V2_OPTIONS;
-
-    ( my $opt, @args ) = _parse_retrieve_args( @args );
+    ( my $opt, @args ) = $self->{direct} ?
+	_parse_args( CLASSIC_RETRIEVE_OPTIONS, @args ) :
+	_parse_retrieve_args( @args );
 
     my $name = shift @args;
     $self->_deprecation_notice( celestrak => $name );
@@ -1342,8 +1296,6 @@ You can specify the L</retrieve> options on this method as well.
 sub file {
     my ($self, @args) = @_;
 
-    $self->get( 'space_track_version' ) > 1
-	and unshift @args, SPACE_TRACK_V2_OPTIONS;
     my ( $opt, $file ) = _parse_retrieve_args( @args );
 
     delete $self->{_pragmata};
@@ -2171,9 +2123,7 @@ sub retrieve {
     my ( $self, @args ) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args(
-	SPACE_TRACK_V2_OPTIONS,
-	@args );
+    @args = _parse_retrieve_args( @args );
     my $opt = _parse_retrieve_dates( shift @args );
 
     my $rest = $self->_convert_retrieve_options_to_rest( $opt );
@@ -2193,7 +2143,7 @@ sub retrieve {
     while ( @args ) {
 
 	my @batch = splice @args, 0, $RETRIEVAL_SIZE;
-	$rest->{NORAD_CAT_ID} = _stringify_oid_list( {
+	$rest->{OBJECT_NUMBER} = _stringify_oid_list( {
 		separator	=> ',',
 		range_operator	=> _rest_range_operator(),
 	    }, @batch );
@@ -2237,7 +2187,7 @@ sub retrieve {
 {
 
     my %rest_sort_map = (
-	catnum	=> 'NORAD_CAT_ID',
+	catnum	=> 'OBJECT_NUMBER',
 	epoch	=> 'EPOCH',
     );
 
@@ -2247,21 +2197,6 @@ sub retrieve {
 	my %rest = ( class	=> 'tle_latest' );
 
 	if ( $opt->{start_epoch} || $opt->{end_epoch} ) {
-
-=begin comment
-
-	    $rest{EPOCH} = sprintf
-#		'%04d-%02d-%02d %02d:%02d:%02d--%04d-%02d-%02d %02d:%02d:%02d',
-#		@{ $opt->{_start_epoch} }[ 0 .. 5 ],
-#		@{ $opt->{_end_epoch} }[ 0 .. 5 ];
-		'%04d-%02d-%02d--%04d-%02d-%02d',
-		@{ $opt->{_start_epoch} }[ 0 .. 2 ],
-		@{ $opt->{_end_epoch} }[ 0 .. 2 ];
-
-=end comment
-
-=cut
-
 	    $rest{EPOCH} = join '--', map { _rest_date( $opt->{$_} ) }
 	    qw{ _start_epoch _end_epoch };
 	    $rest{class} = 'tle';
@@ -2270,7 +2205,7 @@ sub retrieve {
 	}
 
 	$rest{orderby} = ( $rest_sort_map{$opt->{sort} || 'catnum'} ||
-	    'NORAD_CAT_ID' )
+	    'OBJECT_NUMBER' )
 	.  ( $opt->{descending} ? ' desc' : ' asc' );
 
 	$opt->{json}
@@ -2331,9 +2266,9 @@ sub retrieve {
 
     my @exclude_query = (
 	undef,
-	'PAYLOAD,DEBRIS,UNKNOWN,OTHER',
-	'PAYLOAD,ROCKET BODY,UNKNOWN,OTHER',
-	'PAYLOAD,UNKNOWN,OTHER',
+	'PAYLOAD,DEBRIS,UNKNOWN,TBA,OTHER',
+	'PAYLOAD,ROCKET BODY,UNKNOWN,TBA,OTHER',
+	'PAYLOAD,UNKNOWN,TBA,OTHER',
     );
 
     sub _convert_search_options_to_rest {
@@ -2365,9 +2300,9 @@ sub retrieve {
 {
 
     my %headings = (
-	NORAD_CAT_ID	=> 'Catalog Number',
-	SATNAME		=> 'Common Name',
-	INTLDES		=> 'International Designator',
+	OBJECT_NUMBER	=> 'Catalog Number',
+	OBJECT_NAME	=> 'Common Name',
+	OBJECT_ID	=> 'International Designator',
 	COUNTRY		=> 'Country',
 	LAUNCH		=> 'Launch Date',
 	SITE		=> 'Launch Site',
@@ -2378,21 +2313,18 @@ sub retrieve {
 	RCSVALUE	=> 'RCS',
     );
     my @heading_order = qw{
-	NORAD_CAT_ID SATNAME INTLDES COUNTRY LAUNCH SITE DECAY PERIOD
-	APOGEE PERIGEE RCSVALUE
+	OBJECT_NUMBER OBJECT_NAME OBJECT_ID COUNTRY LAUNCH SITE DECAY
+	PERIOD APOGEE PERIGEE RCSVALUE
     };
 
     sub _search_rest {
 	my ( $self, $pred, $xfrm, @args ) = @_;
 	delete $self->{_pragmata};
 
-	{
-	    local $DEFAULT_SPACE_TRACK_STATUS = 'onorbit';
-	    @args = _parse_search_args( SPACE_TRACK_V2_OPTIONS, @args );
-	}
+	@args = _parse_search_args( @args );
 	my $opt = shift @args;
 
-	if ( $pred eq 'NORAD_CAT_ID' ) {
+	if ( $pred eq 'OBJECT_NUMBER' ) {
 
 	    @args = $self->_expand_oid_list( @args )
 		or return HTTP::Response->new(
@@ -2433,8 +2365,6 @@ sub retrieve {
 
 	    my $data = $self->_get_json_object()->decode( $rslt->content() );
 
-##	    $self->_simulate_rest_exclude( $opt, $data );
-
 	    push @found , @{ $data };
 
 	}
@@ -2450,15 +2380,15 @@ sub retrieve {
 	    {
 		local $self->{pretty} = 0;
 		$rslt = $self->retrieve( $opt,
-		    map { $_->{NORAD_CAT_ID} } @found );
+		    map { $_->{OBJECT_NUMBER} } @found );
 	    }
 	    $rslt->is_success()
 		or return $rslt;
-	    my %search_info = map { $_->{NORAD_CAT_ID} => $_ } @found;
+	    my %search_info = map { $_->{OBJECT_NUMBER} => $_ } @found;
 	    my $bodies = $self->_get_json_object()->decode( $rslt->content() );
 	    my $content;
 	    foreach my $body ( @{ $bodies } ) {
-		my $info = $search_info{$body->{NORAD_CAT_ID}};
+		my $info = $search_info{$body->{OBJECT_NUMBER}};
 		if ( $opt->{json} ) {
 		    if ( $opt->{rcs} ) {
 			$body->{RCSVALUE} = $info->{RCSVALUE};
@@ -2466,8 +2396,8 @@ sub retrieve {
 		} else {
 		    my @line_0;
 		    $with_name
-			and push @line_0, defined $info->{SATNAME} ?
-			    $info->{SATNAME} :
+			and push @line_0, defined $info->{OBJECT_NAME} ?
+			    $info->{OBJECT_NAME} :
 			    $body->{TLE_LINE0};
 		    $opt->{rcs}
 			and defined $info->{RCSVALUE}
@@ -2530,9 +2460,9 @@ EOD
 	return ( $rslt, \@table );
 
 	# Note - if we're doing the tab output, the names and order are:
-	# Catalog Number: NORAD_CAT_ID
-	# Common Name: SATNAME
-	# International Designator: INTLDES
+	# Catalog Number: OBJECT_NUMBER
+	# Common Name: OBJECT_NAME
+	# International Designator: OBJECT_ID
 	# Country: COUNTRY
 	# Launch Date: LAUNCH (yyyy-mm-dd)
 	# Launch Site: SITE
@@ -2550,7 +2480,7 @@ EOD
 sub __search_rest_raw {
     my ( $self, %args ) = @_;
     delete $self->{_pragmata};
-    # https://beta.space-track.org/basicspacedata/query/class/satcat/CURRENT/Y/NORAD_CAT_ID/25544/predicates/all/limit/10,0/metadata/true
+    # https://beta.space-track.org/basicspacedata/query/class/satcat/CURRENT/Y/OBJECT_NUMBER/25544/predicates/all/limit/10,0/metadata/true
 
     %args
 	or return HTTP::Response->new( HTTP_PRECONDITION_FAILED, NO_CAT_ID );
@@ -2565,7 +2495,7 @@ sub __search_rest_raw {
     exists $args{predicates}
 	or $args{predicates} = 'all';
     exists $args{orderby}
-	or $args{orderby} = 'NORAD_CAT_ID asc';
+	or $args{orderby} = 'OBJECT_NUMBER asc';
 #   exists $args{limit}
 #	or $args{limit} = 1000;
 
@@ -2657,8 +2587,10 @@ Examples:
 
 The C<-exclude> option is implemented in terms of the C<OBJECT_TYPE>
 predicate, which is one of the values C<'PAYLOAD'>, C<'ROCKET BODY'>,
-C<'DEBRIS'>, C<'UNKNOWN'>, or C<'OTHER'>. It works by selecting all
-values other than the ones specifically excluded.
+C<'DEBRIS'>, C<'UNKNOWN'>, C<'TBA'>, or C<'OTHER'>. It works by
+selecting all values other than the ones specifically excluded. The
+C<'TBA'> status was introduced October 1 2013, supposedly replacing
+C<'UNKNOWN'>, but I have retained both.
 
 This method implicitly calls the C<login()> method if the session cookie
 is missing or expired. If C<login()> fails, you will get the
@@ -2809,7 +2741,7 @@ containing the actual search results.
 =cut
 
 sub search_id {	## no critic (RequireArgUnpacking)
-    splice @_, 1, 0, INTLDES => \&_format_international_id_rest;
+    splice @_, 1, 0, OBJECT_ID => \&_format_international_id_rest;
     goto &_search_rest;
 }
 
@@ -2864,7 +2796,7 @@ containing the actual search results.
 =cut
 
 sub search_name {	## no critic (RequireArgUnpacking)
-    splice @_, 1, 0, SATNAME => sub { return "~~$_[0]" };
+    splice @_, 1, 0, OBJECT_NAME => sub { return "~~$_[0]" };
     goto &_search_rest;
 }
 
@@ -2943,7 +2875,7 @@ containing the actual search results.
 
 sub search_oid {	## no critic (RequireArgUnpacking)
     my ( $self, @args ) = @_;
-    splice @_, 1, 0, NORAD_CAT_ID => sub { return $_[0] };
+    splice @_, 1, 0, OBJECT_NUMBER => sub { return $_[0] };
     goto &_search_rest;
 }
 
@@ -3084,8 +3016,7 @@ my %known_meta = (
 		my $data = $self->_get_json_object()->decode( $content );
 		foreach my $datum ( @{ $data } ) {
 		    push @lines, [
-			sprintf '%05d', $datum->{NORAD_CAT_ID},
-			defined $datum->{SATNAME} ? $datum->{SATNAME} :
+			sprintf '%05d', $datum->{OBJECT_NUMBER},
 			defined $datum->{OBJECT_NAME} ? $datum->{OBJECT_NAME} :
 			(),
 		    ];
@@ -3418,15 +3349,20 @@ sub spaceflight {
     my ($self, @args) = @_;
     delete $self->{_pragmata};
 
-    @args = _parse_retrieve_args(
+    @args = _parse_args(
 	[
 	    'all!' => 'retrieve all data',
 	    'effective!' => 'include effective date',
+	    # The below are the version 1 retrieval options, which are
+	    # emulated for this method. See the definition of
+	    # CLASSIC_RETRIEVE_OPTIONS for more information.
+	    @{ CLASSIC_RETRIEVE_OPTIONS() },
 	],
 	@args );
     my $opt = _parse_retrieve_dates( shift @args );
 
     $opt->{all} = 0 if $opt->{last5} || $opt->{start_epoch};
+    $opt->{sort} ||= _validate_sort( $opt->{sort} );
 
     my @list;
     if (@args) {
@@ -3665,7 +3601,7 @@ sub spacetrack {
 		basicspacedata	=> 'query',
 		class		=> 'satcat',
 		format		=> 'json',
-		predicates	=> 'NORAD_CAT_ID',
+		predicates	=> 'OBJECT_NUMBER',
 		CURRENT		=> 'Y',
 		DECAY		=> 'null-val',
 		_sort_rest_arguments( $query ),
@@ -3677,7 +3613,7 @@ sub spacetrack {
 	    foreach my $body ( @{
 		$self->_get_json_object()->decode( $rslt->content() )
 	    } ) {
-		$oid{ $body->{NORAD_CAT_ID} + 0 } = 1;
+		$oid{ $body->{OBJECT_NUMBER} + 0 } = 1;
 	    }
 
 	}
@@ -3929,8 +3865,7 @@ lost as the individual OIDs are updated.
     sub update {
 	my ( $self, @args ) = @_;
 
-	my ( $opt, $fn ) = _parse_retrieve_args(
-	    SPACE_TRACK_V2_OPTIONS, @args );
+	my ( $opt, $fn ) = _parse_retrieve_args( @args );
 
 	$opt = { %{ $opt } };	# Since we modify it.
 
@@ -3952,7 +3887,7 @@ lost as the individual OIDs are updated.
 	my $file = -1;
 	my @oids;
 	foreach my $datum ( @{ $data } ) {
-	    push @oids, $datum->{NORAD_CAT_ID};
+	    push @oids, $datum->{OBJECT_NUMBER};
 	    my $ff = defined $datum->{_file_of_record} ?
 		delete $datum->{_file_of_record} :
 		$datum->{FILE};
@@ -3983,10 +3918,10 @@ lost as the individual OIDs are updated.
 	    $resp->is_success()
 		or return $resp;
 
-	    my %merge = map { $_->{NORAD_CAT_ID} => $_ } @{ $data };
+	    my %merge = map { $_->{OBJECT_NUMBER} => $_ } @{ $data };
 
 	    foreach my $datum ( @{ $json->decode( $resp->content() ) } ) {
-		%{ $merge{$datum->{NORAD_CAT_ID}} } = %{ $datum };
+		%{ $merge{$datum->{OBJECT_NUMBER}} } = %{ $datum };
 	    }
 
 	    {
@@ -4339,25 +4274,14 @@ sub _expand_oid_list {
 # formatting prefixes the 'contains' wildcard '~~' unless year, sequence
 # and part are all present.
 
-{
-    my %two_digit_year_class = map { $_ => 1 } qw{ tle tle_latest };
-
-    sub _format_international_id_rest {
-	my ( $intl_id, $class ) = @_;
-	my @parts = _parse_international_id( $intl_id );
-	my $yt;
-	if ( $two_digit_year_class{$class} ) {
-	    $parts[0] %= 100;
-	    $yt = '%02d';
-	} else {
-	    $yt = '%04d-';
-	}
-	@parts >= 3
-	    and return sprintf "$yt%03d%s", @parts;
-	@parts >= 2
-	    and return sprintf "~~$yt%03d", @parts;
-	return sprintf "~~$yt", $parts[0];
-    }
+sub _format_international_id_rest {
+    my ( $intl_id, $class ) = @_;
+    my @parts = _parse_international_id( $intl_id );
+    @parts >= 3
+	and return sprintf '%04d-%03d%s', @parts;
+    @parts >= 2
+	and return sprintf '~~%04d-%03d', @parts;
+    return sprintf '~~%04d-', $parts[0];
 }
 
 # Parse a launch date, and format it for a Space-Track REST query. The
@@ -4684,18 +4608,39 @@ EOD
 
 sub _parse_args {
     my ( $lgl_opts, @args ) = @_;
-    ref $args[0] eq 'HASH' and return @args;
-    my %lgl = @{ $lgl_opts };
-    my $opt = {};
-    local @ARGV = @args;
-    GetOptions ($opt, keys %lgl) or croak <<"EOD";
-Error - Legal options are@{[map {(my $q = $_) =~ s/=.*//;
-	$q =~ s/!//;
-	"\n  -$q $lgl{$_}"} sort keys %lgl]}
+    if ( 'HASH' eq ref $args[0] ) {
+	my $opt = { %{ shift @args } };	# Poor man's clone.
+	# NOTE that I can not actually validate the options here, since
+	# the search code involves passing a search_*() options hash to
+	# retrieve(). If I want validation here I have to sanitize the
+	# hash first, and I have no way to do that.
+	return ( $opt, @args );
+    } else {
+	my $opt = {};
+	my %lgl = @{ $lgl_opts };
+	local @ARGV = @args;
+	GetOptions ($opt, keys %lgl)
+	    or _parse_args_failure( undef, %lgl );
+	return ( $opt, @ARGV );
+    }
+}
+
+sub _parse_args_failure {
+    my ( $name, %lgl ) = @_;
+    my $msg = defined $name ?
+	"Error - Option -$name illegal. Legal options are\n" :
+	"Error - Legal options are\n";
+    foreach my $opt ( sort keys %lgl ) {
+	my $desc = $lgl{$opt};
+	$opt =~ s/ [=|!] .* //smx;
+	$msg .= "  -$opt - $desc\n";
+    }
+    $msg .= <<"EOD";
 with dates being either Perl times, or numeric year-month-day, with any
-non-numeric character valid as punctuation.
+non-numeric character valid as punctuation
 EOD
-    return ( $opt, @ARGV );
+    chomp $msg;
+    croak $msg;
 }
 
 # Parse an international launch ID in the form yyyy-sssp or yysssp.
@@ -4712,7 +4657,7 @@ sub _parse_international_id {
 
     if ( $intl_id =~
 	m< \A ( \d+ ) [^[:alpha:][:digit:]\s]
-	    (?: ( \d{3} ) ( [[:alpha:]]* ) )? \z >smx
+	    (?: ( \d{1,3} ) ( [[:alpha:]]* ) )? \z >smx
     ) {
 	( $year, $launch, $part ) = ( $1, $2, $3 );
     } elsif ( $intl_id =~
@@ -4762,42 +4707,48 @@ sub _parse_launch_date {
 #	it simply returns its argument list, under the assumption that
 #	it has already been called.
 
-my @legal_retrieve_args = (
-    descending => '(direction of sort)',
-    'end_epoch=s' => 'date',
-    last5 => '(ignored if -start_epoch or -end_epoch specified)',
-    'sort=s' => "type ('catnum' or 'epoch', with 'catnum' the default)",
-    'start_epoch=s' => 'date',
-);
+{
 
-sub _parse_retrieve_args {
-    my @args = @_;
-    my $extra_args = ref $args[0] eq 'ARRAY' ? shift @args : undef;
+    my @legal_retrieve_options = (
+	@{ CLASSIC_RETRIEVE_OPTIONS() },
+	# Space Track Version 2 interface options
+	'since_file=i'
+	    => '(Return only results added after the given file number)',
+	'json!'	=> '(Return TLEs in JSON format)',
+    );
 
-    my $opt;
+    sub _parse_retrieve_args {
+	my @args = @_;
+	my $extra_options = ref $args[0] eq 'ARRAY' ?
+	    shift @args :
+	    undef;
 
-    if ( 'HASH' eq ref $args[0] ) {
+	( my $opt, @args ) = _parse_args(
+	    ( $extra_options ?
+		[ @legal_retrieve_options, @{ $extra_options } ] :
+		\@legal_retrieve_options ),
+	    @args );
 
-	$opt = { %{ shift @args } };	# Poor man's clone
+	$opt->{sort} ||= _validate_sort( $opt->{sort} );
 
-    } else {
-
-	( $opt, @args ) = _parse_args(
-	    ( $extra_args ? [ @legal_retrieve_args, @{ $extra_args } ] :
-		\@legal_retrieve_args ), @args );
-
+	return ( $opt, @args );
     }
+}
 
-    $opt->{sort} ||= 'catnum';
-
-    $opt->{sort} eq 'catnum'
-	or $opt->{sort} eq 'epoch'
-	or die <<"EOD";
-Error - Illegal sort '$opt->{sort}'. You must specify 'catnum'
-        (the default) or 'epoch'.
-EOD
-
-    return ( $opt, @args );
+# my $sort = _validate_sort( $sort );
+#
+# Validate and canonicalize the value of the -sort option.
+{
+    my %valid = map { $_ => 1 } qw{ catnum epoch };
+    sub _validate_sort {
+	my ( $sort ) = @_;
+	defined $sort
+	    or return 'catnum';
+	$sort = lc $sort;
+	$valid{$sort}
+	    or croak "Illegal sort '$sort'";
+	return $sort;
+    }
 }
 
 #	$opt = _parse_retrieve_dates ($opt);
@@ -4890,7 +4841,9 @@ my %legal_search_status = map {$_ => 1} qw{onorbit decayed all};
 sub _parse_search_args {
     my @args = @_;
     unless (ref ($args[0]) eq 'HASH') {
-	ref $args[0] eq 'ARRAY' and my @extra = @{shift @args};
+	my @extra;
+	ref $args[0] eq 'ARRAY'
+	    and @extra = @{shift @args};
 	@args = _parse_retrieve_args(
 	    [ @legal_search_args, @extra ], @args );
     }
@@ -4898,7 +4851,7 @@ sub _parse_search_args {
     my $opt = $args[0];
     _parse_retrieve_dates( $opt );
 
-    $opt->{status} ||= $DEFAULT_SPACE_TRACK_STATUS;
+    $opt->{status} ||= 'onorbit';
 
     $legal_search_status{$opt->{status}} or croak <<"EOD";
 Error - Illegal status '$opt->{status}'. You must specify one of
@@ -4917,45 +4870,6 @@ EOD
 
     return @args;
 }
-
-=begin comment
-
-# This code was used to emulate the Space Track v1 classification of
-# bodies under v2, for the purposes of the -exclude search option. It is
-# currently implemented in terms of the OBJECT_TYPE field, but the code
-# is retained (commented-out) in case there turns out to be a crying
-# need to emulate v1 in this area.
-
-{
-    my %exclude_names = (
-	rocket	=> [ map { quotemeta $_ } qw{ r/b akm pkm } ],
-	debris	=> [ map { quotemeta $_ } qw{ deb debris coolant
-	    shroud }, 'westford needles' ],
-    );
-
-    # _simulate_rest_exclude() simulates the results of a v1 exclusion
-    # on a v2 search, by filtering out all the bodies whose names meet
-    # the exclusion criteria.
-
-    sub _simulate_rest_exclude {
-	my ( $self, $opt, $data ) = @_;
-	defined $opt->{exclude}
-	    or return;
-	my @exclusion;
-	foreach my $exclude ( @{ $opt->{exclude} } ) {
-	    push @exclusion, @{ $exclude_names{$exclude} };
-	}
-	@exclusion
-	    or return;
-	my $re = join '|', @exclusion;
-	@{ $data } = grep { $_->{OBJECT_NAME} !~ m/$re/smxi } @{ $data };
-	return;
-    }
-}
-
-=end comment
-
-=cut
 
 #	@keys = _sort_rest_arguments( \%rest_args );
 #
@@ -4999,7 +4913,7 @@ sub _spacetrack_v2_response_is_empty {
     return $resp->content() =~ m/ \A \s* (?: [[] \s* []] )? \s* \z /smx;
 }
 
-# The following UNDOCUMENTED hack will disappear when the REST
+# TODO The following UNDOCUMENTED hack will disappear when the REST
 # interface's behavior when you have ranges in a list of OIDs
 # stabilizes.
 sub _rest_range_operator {
@@ -5008,7 +4922,7 @@ sub _rest_range_operator {
 	undef;
 }
 
-# The following UNDOCUMENTED hack will disappear when the REST
+# TODO The following UNDOCUMENTED hack will disappear when the REST
 # interface's behavior with fractional days stabilizes.
 
 sub _rest_date {
