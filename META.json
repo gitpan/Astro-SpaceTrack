@@ -31,7 +31,7 @@
             "Carp" : "0",
             "Data::Dumper" : "0",
             "Exporter" : "0",
-            "Getopt::Long" : "0",
+            "Getopt::Long" : "2.33",
             "HTTP::Response" : "0",
             "HTTP::Status" : "6.03",
             "IO::File" : "0",
@@ -54,10 +54,10 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.081"
+         "version" : "0.081_01"
       }
    },
-   "release_status" : "stable",
+   "release_status" : "testing",
    "resources" : {
       "bugtracker" : {
          "web" : "https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack"
@@ -66,5 +66,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.081"
+   "version" : "0.081_01"
 }
