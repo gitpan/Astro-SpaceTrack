@@ -74,23 +74,13 @@ made.
 
 =head1 DESCRIPTION
 
-This package accesses the Space-Track web site,
-L<http://www.space-track.org>, and retrieves orbital data from this
-site. You must register and get a username and password before you
-can make use of this package, and you must abide by the site's
-restrictions, which include not making the data available to a
-third party.
+This package retrieves orbital data from the Space Track web site
+L<https://www.space-track.org> and several others. You must register and
+get a user name and password before you can get data from Space Track.
 
-In addition, the celestrak method queries L<http://celestrak.com/> for
-a named data set, and then queries L<http://www.space-track.org/> for
-the orbital elements of the objects in the data set. This method may not
-require a Space Track username and password, depending on how you have
-the Astro::SpaceTrack object configured. See the documentation on this
-method for the details.
-
-Other methods (amsat(), spaceflight() ...) have been added to access
-other repositories of orbital data, and in general these do not require
-a Space Track username and password.
+Other methods (C<celestrak()>, C<amsat()>, C<spaceflight()> ...) have
+been added to access other repositories of orbital data, and in general
+these do not require a Space Track username and password.
 
 Nothing is exported by default, but the shell method/subroutine
 and the BODY_STATUS constants (see L</iridium_status>) can be
@@ -119,7 +109,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.082';
+our $VERSION = '0.083';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -2305,6 +2295,49 @@ sub retrieve {
 }
 
 {
+    my @heading_info = (
+	[ undef,	OBJECT_NUMBER	=> 'Catalog Number' ],
+	[ undef,	OBJECT_NAME	=> 'Common Name' ],
+	[ undef,	OBJECT_ID	=> 'International Designator' ],
+	[ undef,	COUNTRY		=> 'Country' ],
+	[ undef,	LAUNCH		=> 'Launch Date' ],
+	[ undef,	SITE		=> 'Launch Site' ],
+	[ undef,	DECAY		=> 'Decay Date' ],
+	[ undef,	PERIOD		=> 'Period' ],
+	[ undef,	APOGEE		=> 'Apogee' ],
+	[ undef,	PERIGEE		=> 'Perigee' ],
+	[ 'comment',	COMMENT		=> 'Comment' ],
+	[ undef,	RCSVALUE	=> 'RCS' ],
+    );
+
+    sub _search_heading_order {
+	my ( $opt ) = @_;
+	return ( map { $_->[1] }
+	    _search_heading_relevant( $opt )
+	);
+    }
+
+    sub _search_heading_relevant {
+	my ( $opt ) = @_;
+	return (
+	    grep { ! defined $_->[0] || $opt->{$_->[0]} }
+	    @heading_info
+	);
+    }
+
+    sub _search_heading_hash_ref {
+	my ( $opt ) = @_;
+	return {
+	    map { $_->[1] => $_->[2] }
+	    _search_heading_relevant( $opt )
+	};
+    }
+
+}
+
+{
+
+=begin comment
 
     my %headings = (
 	OBJECT_NUMBER	=> 'Catalog Number',
@@ -2324,12 +2357,19 @@ sub retrieve {
 	PERIOD APOGEE PERIGEE RCSVALUE
     };
 
+=end comment
+
+=cut
+
     sub _search_rest {
 	my ( $self, $pred, $xfrm, @args ) = @_;
 	delete $self->{_pragmata};
 
 	@args = _parse_search_args( @args );
 	my $opt = shift @args;
+
+	my $headings = _search_heading_hash_ref( $opt );
+	my @heading_order = _search_heading_order( $opt );
 
 	if ( $pred eq 'OBJECT_NUMBER' ) {
 
@@ -2438,7 +2478,7 @@ EOD
 		$content = $self->_get_json_object()->encode( \@found );
 	    } else {
 		foreach my $datum (
-		    \%headings,
+		    $headings,
 		    @found
 		) {
 		    $content .= join( "\t",
@@ -2461,7 +2501,7 @@ EOD
 
 	my @table;
 	foreach my $datum (
-	    \%headings,
+	    $headings,
 	    @found
 	) {
 	    push @table, [ map { $datum->{$_} } @heading_order ];
@@ -2582,6 +2622,12 @@ options may be specified:
    of the response object is the results of the search,
    one line per body found, with the fields tab-
    delimited.
+ -comment
+   specifies that you want the comment field. This will
+   not appear in the TLE data, but in the satcat data
+   returned in array context, or if C<-notle> is
+   specified. The default is C<-nocomment> for backward
+   compatibility.
 
 Examples:
 
@@ -4913,6 +4959,7 @@ EOD
 	'tle!' => '(return TLE data from search (defaults true))',
 	'status=s' => q{('onorbit', 'decayed', or 'all')},
 	'exclude=s@' => q{('debris', 'rocket', or 'debris,rocket')},
+	'comment!' => '(include comment in satcat data)',
     );
     my %legal_search_exclude = map {$_ => 1} qw{debris rocket};
     my %legal_search_status = map {$_ => 1} qw{onorbit decayed all};

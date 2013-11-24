@@ -5,7 +5,7 @@ author:
 build_requires:
   Test::More: 0.96
 dynamic_config: 1
-generated_by: 'Module::Build version 0.4008, CPAN::Meta::Converter version 2.132830'
+generated_by: 'Module::Build version 0.4202, CPAN::Meta::Converter version 2.132830'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -19,7 +19,7 @@ no_index:
 provides:
   Astro::SpaceTrack:
     file: lib/Astro/SpaceTrack.pm
-    version: 0.082
+    version: 0.083
 requires:
   Carp: 0
   Data::Dumper: 0
@@ -44,4 +44,4 @@ requires:
 resources:
   bugtracker: https://rt.cpan.org/Public/Dist/Display.html?Name=Astro-SpaceTrack
   license: http://dev.perl.org/licenses/
-version: 0.082
+version: 0.083
