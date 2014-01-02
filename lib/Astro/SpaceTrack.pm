@@ -109,7 +109,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.083';
+our $VERSION = '0.084';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -230,6 +230,7 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	glonass		=> { name => 'Glonass',		rms => 1 },
 	meteosat	=> { name => 'Meteosat',	rms => 1 },
 	intelsat	=> { name => 'Intelsat',	rms => 1 },
+	ses		=> { name => 'SES',		rms => 1 },
 	orbcomm		=> { name => 'Orbcomm (no rms data)' },
     },
     iridium_status => {
@@ -274,13 +275,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 		},
 #		number	=> 1,
 	    },
-	    full_fast => {
-		deprecate	=> 'full',
-		name	=> 'Full catalog, with some objects no longer in orbit',
-		tle	=> {
-		    EPOCH	=> '>now-30',
-		},
-	    },
 	    payloads	=> {
 		name	=> 'All payloads',
 		satcat	=> {
@@ -305,16 +299,6 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 #		    ECCENTRICITY	=> '<0.01',
 ##		    MEAN_MOTION		=> '0.99--1.01',
 #		},
-		tle	=> {
-		    ECCENTRICITY	=> '<0.01',
-		    EPOCH		=> '>now-30',
-		    MEAN_MOTION		=> '0.99--1.01',
-		    OBJECT_TYPE		=> 'payload',
-		},
-	    },
-	    geosynchronous_fast => {
-		deprecated	=> 'geosynchronous',
-		name	=> 'Geosynchronous satellites',
 		tle	=> {
 		    ECCENTRICITY	=> '<0.01',
 		    EPOCH		=> '>now-30',
@@ -629,7 +613,7 @@ Space Track ($url/) you must register and
 get a username and password, and you may not make the data available to
 a third party without prior permission from Space Track.
 
-Copyright 2005-2012 by T. R. Wyant (wyant at cpan dot org).
+Copyright 2005-2014 by T. R. Wyant (wyant at cpan dot org).
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
@@ -856,6 +840,11 @@ sub celestrak {
 	_parse_retrieve_args( @args );
 
     my $name = shift @args;
+    defined $name
+	or return HTTP::Response->new(
+	HTTP_PRECONDITION_FAILED,
+	'No catalog name specified' );
+
     $self->_deprecation_notice( celestrak => $name );
 
     $self->{direct}
@@ -910,6 +899,10 @@ sub celestrak_supplemental {
 	], @args );
 
     my $name = shift @args;
+    defined $name
+	or return HTTP::Response->new(
+	HTTP_PRECONDITION_FAILED,
+	'No catalog name specified' );
 
     not $opt->{rms}
 	or $catalogs{celestrak_supplemental}{$name}{rms}
@@ -3531,14 +3524,10 @@ The following catalogs are available:
 
     Name            Description
     full            Full catalog
-    full_fast       Full catalog, faster but less
-                        accurate query (DEPRECATED)
     payloads        All payloads
     navigation      Navigation satellites
     weather         Weather satellites
     geosynchronous  Geosynchronous bodies
-    geosynchronous_fast Geosynchronous bodies, faster
-                        but less accurate query (DEPRECATED)
     iridium         Iridium satellites
     orbcomm         OrbComm satellites
     globalstar      Globalstar satellites
@@ -3548,15 +3537,13 @@ The following catalogs are available:
     visible         Visible satellites
     special         Special satellites
 
-The C<*_fast> queries are, as of version 0.069_02, the same
-as their un-fast versions. The queries are those implemented on the
-Space Track web site, and B<may> included recently-decayed satellites.
-
-The C<*_fast> queries are also deprecated as of version
-0.069_02. Because these were always considered unsupported,
-the deprecation cycle will be accelerated. They will C<carp()> on every
-use, and six months after release 0.070 will produce fatal errors. Six
-months after they become fatal, they will be removed completely.
+The C<full_fast> and C<geosynchronous_fast> queries became, as of
+version 0.069_02, the same as their un-fast versions. The queries are
+those implemented on the Space Track web site, and B<may> included
+recently-decayed satellites. These queries were deprecated as of version
+0.069_02, and removed as of 0.084. All reference to them
+(meaning, this paragraph) will be removed in the first release after
+July 1 2014.
 
 The following option is supported:
 
@@ -5059,9 +5046,10 @@ sub _spacetrack_v2_response_is_empty {
 # interface's behavior when you have ranges in a list of OIDs
 # stabilizes.
 sub _rest_range_operator {
-    return _get_env( SPACETRACK_REST_RANGE_OPERATOR => 1 ) ?
-	'--' :
-	undef;
+#   return _get_env( SPACETRACK_REST_RANGE_OPERATOR => 1 ) ?
+#	'--' :
+#	undef;
+    return '--';
 }
 
 # TODO The following UNDOCUMENTED hack will disappear when the REST
@@ -5069,9 +5057,11 @@ sub _rest_range_operator {
 
 sub _rest_date {
     my ( $time ) = @_;
-    my $fmt = _get_env( SPACETRACK_REST_FRACTIONAL_DATE => 1 ) ?
-    '%04d-%02d-%02d %02d:%02d:%02d' : '%04d-%02d-%02d';
-    return sprintf $fmt, @{ $time };
+#   my $fmt = _get_env( SPACETRACK_REST_FRACTIONAL_DATE => 1 ) ?
+#	'%04d-%02d-%02d %02d:%02d:%02d' :
+#	'%04d-%02d-%02d';
+#   return sprintf $fmt, @{ $time };
+    return sprintf '%04d-%02d-%02d %02d:%02d:%02d', @{ $time };
 }
 
 sub _get_env {
@@ -5424,37 +5414,11 @@ An explicit username and/or password passed to the new () method
 overrides the environment variable, as does any subsequently-set
 username or password.
 
-=head2 SPACETRACK_REST_RANGE_OPERATOR
-
-This environment variable controls whether the Space Track version 2
-interface (a.k.a. the REST interface) uses OID ranges in its queries.
-A value Perl sees as false (i.e. C<0> or C<''>) causes ranges not to be
-used. A value Perl sees as true (i.e. anything else) causes ranges to be
-used. The default is to use ranges.
-
-Support for this environment variable will be removed the first release
-after January 1 2014, since I think range support in the REST interface
-is stable.
-
-=head2 SPACETRACK_REST_FRACTIONAL_DATE
-
-This environment variable controls whether the Space Track version 2
-interface (a.k.a. the REST interface) will query epoch ranges (i.e. the
-C<-start_epoch> and C<-end_epoch> C<retrieve()> options) to
-fractional-day resolution.  A value Perl sees as false (i.e. C<0> or
-C<''>) causes epoch queries to be truncated to even days. A value Perl
-sees as true (i.e. anything else) causes epoch queries to be to the
-nearest second.  The default is to query to the nearest second.
-
-Support for this environment variable will be removed the first release
-after January 1 2014, since I think fractional-day query support in the
-REST interface is stable.
-
 =head2 SPACETRACK_SKIP_OPTION_HASH_VALIDATION
 
-As of version 0.081_01, method options passed as a hash
-reference will be validate. Before this, only command-line-style options
-were validated. If the validation causes problem, set this environment
+As of version 0.081_01, method options passed as a hash reference will
+be validated. Before this, only command-line-style options were
+validated. If the validation causes problem, set this environment
 variable to a value Perl sees as true (i.e. anything but C<0> or C<''>)
 to revert to the old behavior.
 
@@ -5504,7 +5468,7 @@ Thomas R. Wyant, III (F<wyant at cpan dot org>)
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2005-2013 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
+Copyright 2005-2014 by Thomas R. Wyant, III (F<wyant at cpan dot org>).
 
 =head1 LICENSE
 

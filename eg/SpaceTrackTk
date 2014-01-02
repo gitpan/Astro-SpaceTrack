@@ -10,7 +10,7 @@ use IO::File;
 use Tk;
 use Tk::Pane;
 
-our $VERSION = '0.083';
+our $VERSION = '0.084';
 
 my @pad = qw{ -padx 5 -pady 5 };	# Standard cell padding
 
@@ -402,6 +402,45 @@ sub celestrak_panel {
     include_common_names( $widget, $data, $dg );
 
     return;
+}
+
+# Adjust the data panel to request Celestrak supplemental data
+sub celestrak_supplemental_panel {
+    my ( $widget, $data ) = @_;
+
+    $widget->{celestrak_supplemental} ||= {
+	label => $widget->{data_frame}->Label( -text => 'Catalog name:'
+	),
+	selector => $widget->{data_frame}->Optionmenu(
+	    -options => ( $st->names( 'celestrak_supplemental' ) )[1],
+	    -variable => \$data->{celestrak_supplemental}{name},
+	),
+	rms_label => $widget->{data_frame}->Label( -text => 'RMS:' ),
+	rms_value => $widget->{data_frame}->Checkbutton(
+	    -relief	=> 'flat',
+	    -variable	=> \$data->{celestrak_supplemental}{rms},
+	),
+    };
+
+    my $dg = grid_new( 1 );
+    $widget->{celestrak_supplemental}{label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{celestrak_supplemental}{selector}->grid( grid_args( $dg, sticky => 'w')
+	)->raise();
+    grid_next_row( $dg );
+    $widget->{celestrak_supplemental}{rms_label}->grid( grid_args( $dg, sticky => 'e' ) );
+    $widget->{celestrak_supplemental}{rms_value}->grid( grid_args( $dg, sticky => 'w')
+	)->raise();
+
+    return;
+}
+
+sub celestrak_supplemental_args {
+    my ( $data ) = @_;
+    my @rslt;
+    $data->{celestrak_supplemental}{rms}
+	and push @rslt, '-rms';
+    push @rslt, $data->{celestrak_supplemental}{name};
+    return @rslt;
 }
 
 # Adjust the data panel to retrieve data specified in a local file.
@@ -1111,7 +1150,8 @@ sub load_data_frame {
     BEGIN {
 	@options = (
 	    [
-		[ 'Celestrak catalog'	=> 'celestrak' ],
+		[ 'Celestrak catalog'		=> 'celestrak' ],
+		[ 'Celestrak supplemental'	=> 'celestrak_supplemental' ],
 		[ 'Human Space Flight data'	=> 'spaceflight' ],
 		[ 'Iridium Status'		=> 'iridium_status' ],
 		[ 'Local file catalog'		=> 'file' ],
@@ -1127,7 +1167,8 @@ sub load_data_frame {
 		[ 'Space Track satellite OIDs'	=> 'retrieve' ],
 	    ],
 	    [
-		[ 'Celestrak catalog'	=> 'celestrak' ],
+		[ 'Celestrak catalog'		=> 'celestrak' ],
+		[ 'Celestrak supplemental'	=> 'celestrak_supplemental' ],
 		[ 'Human Space Flight data'	=> 'spaceflight' ],
 		[ 'Iridium Status'		=> 'iridium_status' ],
 		[ 'Radio Amateur Satellite Corporation data' => 'amsat' ],
@@ -1288,7 +1329,7 @@ Thomas R. Wyant, III F<wyant at cpan dot org>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2010-2013 by Thomas R. Wyant, III
+Copyright (C) 2010-2014 by Thomas R. Wyant, III
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl 5.10.0. For more details, see the full text
