@@ -19,6 +19,7 @@ sub new {
 
 sub build_requires {
     return +{
+	'File::Temp'	=> 0,
 ##	'Test::More'	=> 0.40,
 ##	'Test::More'	=> 0.88,	# Because of done_testing().
 	'Test::More'	=> 0.96,	# Because of subtest()
@@ -64,10 +65,13 @@ sub requires {
     my ( $self, @extra ) = @_;
 
     return {
+	'Archive::Zip'		=> 0,		# For mccants().
 	'Carp'			=> 0,
 	'Data::Dumper'		=> 0,
 	'Exporter'		=> 0,
 	'Getopt::Long'		=> 2.39,	# For getoptionsfromarray
+	'HTTP::Date'		=> 0,
+	'HTTP::Request'		=> 0,
 	'HTTP::Response'	=> 0,
 	'HTTP::Status'		=> 6.03,	# For the teapot status
 	'IO::File'		=> 0,
