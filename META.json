@@ -29,7 +29,6 @@
       },
       "runtime" : {
          "requires" : {
-            "Archive::Zip" : "0",
             "Carp" : "0",
             "Data::Dumper" : "0",
             "Exporter" : "0",
@@ -39,6 +38,7 @@
             "HTTP::Response" : "0",
             "HTTP::Status" : "6.03",
             "IO::File" : "0",
+            "IO::Uncompress::Unzip" : "0",
             "JSON" : "0",
             "LWP::Protocol::https" : "0",
             "LWP::UserAgent" : "0",
@@ -58,7 +58,7 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.084_02"
+         "version" : "0.084_03"
       }
    },
    "release_status" : "testing",
@@ -70,5 +70,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.084_02"
+   "version" : "0.084_03"
 }
