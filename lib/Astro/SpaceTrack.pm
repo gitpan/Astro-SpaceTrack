@@ -109,7 +109,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.085';
+our $VERSION = '0.085_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1712,7 +1712,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 	);
     my %status_portable = (	# Map statuses to portable.
 	kelso => {
-	    ''	=> BODY_STATUS_IS_OPERATIONAL,
+#	    ''	=> BODY_STATUS_IS_OPERATIONAL,
 	    '[-]' => BODY_STATUS_IS_TUMBLING,
 	    '[S]' => BODY_STATUS_IS_SPARE,
 	    '[+]' => BODY_STATUS_IS_OPERATIONAL,
@@ -1728,9 +1728,10 @@ The BODY_STATUS constants are exportable using the :status tag.
 	},
 #	sladen => undef,	# Not needed; done programmatically.
     );
-    while (my ($key, $val) = each %{$status_portable{kelso}}) {
-	$key and $status_portable{kelso_inverse}{$val} = $key;
-    }
+
+    $status_portable{kelso_inverse} = { reverse %{
+	$status_portable{kelso} } };
+    $status_portable{kelso}{''}	= BODY_STATUS_IS_OPERATIONAL;
 
     sub iridium_status {
 	my $self = shift;
@@ -5306,9 +5307,8 @@ EOD
 #	_parse_search_args parses the search_*() options off its
 #	arguments, prefixes a reference to the resultant options
 #	hash to the remaining arguments, and returns the resultant
-#	list. If the first argument is a hash reference, it simply
-#	returns its argument list, under the assumption that it
-#	has already been called.
+#	list. If the first argument is a hash reference, it validates
+#	that the hash contains only legal options.
 
 {
 
@@ -5333,7 +5333,6 @@ EOD
 	}
 
 	my $opt = $args[0];
-	_parse_retrieve_dates( $opt );
 
 	$opt->{status} ||= 'onorbit';
 
@@ -5359,7 +5358,7 @@ EOD
 
     # _remove_search_options
     #
-    # Shallow clone the argument hasn, remove any search arguments from
+    # Shallow clone the argument hash, remove any search arguments from
     # it, and return a reference to the clone. Used for sanitizing the
     # options for a search before passing them to retrieve() to actually
     # get the TLEs.
