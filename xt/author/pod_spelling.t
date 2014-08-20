@@ -46,6 +46,7 @@ globalstar
 Globalstar
 glonass
 GLONASS
+GoDaddy
 hoc
 HTTPS
 IDs
@@ -78,6 +79,7 @@ redirections
 Redirections
 redistributer
 redistributers
+RCS
 RMS
 SATCAT
 sladen
