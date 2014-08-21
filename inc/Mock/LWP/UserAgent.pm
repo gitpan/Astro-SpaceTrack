@@ -13,7 +13,7 @@ use HTTP::Response;
 use LWP::UserAgent;
 use JSON;
 
-our $VERSION = '0.086_03';
+our $VERSION = '0.086_04';
 
 our $CANNED_RESPONSE_DIR = File::Spec->catdir(
     qw{ t data Mock-LWP-UserAgent } );
@@ -31,6 +31,8 @@ my %original = map { $_ => LWP::UserAgent->can( $_ ) } qw{
 };
 
 sub import {
+
+    $Astro::SpaceTrack::SPACETRACK_DELAY_SECONDS = 0;
 
     no warnings qw{ redefine };
 
@@ -152,6 +154,9 @@ or, to have the support routines but have a working C<LWP::UserAgent>,
 THIS CLASS IS PRIVATE TO THE C<Astro-SpaceTrack> DISTRIBUTION. It may be
 modified or revoked at any time, without notice. Documentation is for
 the benefit of the author.
+
+In order to work correctly, this module must be imported B<after>
+C<Astro::SpaceTrack>.
 
 This class mocks the salient features of the C<Mock::LWP::UserAgent>
 interface. But all responses are canned, and based on files.
