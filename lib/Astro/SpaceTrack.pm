@@ -135,7 +135,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.087';
+our $VERSION = '0.087_01';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -5655,13 +5655,10 @@ EOD
 
     sub _parse_search_args {
 	my @args = @_;
-	unless (ref ($args[0]) eq 'HASH') {
-	    my @extra;
-	    ref $args[0] eq 'ARRAY'
-		and @extra = @{shift @args};
-	    @args = _parse_retrieve_args(
-		[ @legal_search_args, @extra ], @args );
-	}
+
+	my $extra = 'ARRAY' eq ref $args[0] ? shift @args : [];
+	@args = _parse_retrieve_args(
+	    [ @legal_search_args, @{ $extra } ], @args );
 
 	my $opt = $args[0];
 
