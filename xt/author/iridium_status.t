@@ -24,18 +24,27 @@ my %known_inconsistent = (
     24906 => { kelso => 1 },	# Kelso: spare; others: operational
 				# 16-Nov-2012: Sladen declares spare
 				# 08-Apr-2014: Sladen declares operational
-    24944 => { kelso => 1 },	# 01-Apr-2014: Kelso declares spare
-    25104 => { sladen => 1 },	# 08-Apr-2014 Sladen: declares spare;
-				#             others: operational
+    24944 => { kelso => 1,	# 01-Apr-2014: Kelso declares spare
+	       sladen => 1 },	# 09-Sep-2014: Sladen declares failed
+#   25039 => { sladen => 1 },	# 09-Sep-2014: Sladen declares spare
+#				# 11-Dec-2014L Sladen declares in-service again
+#   25104 => { sladen => 1 },	# 08-Apr-2014 Sladen: declares spare;
+#				#             others: operational
+#				# 11-Dec-2014: Sladen declares operational again
 ###    25578 => { kelso => 1 },	# Kelso: operational; others: spare
 ###    24903 => { kelso => 1 },	# Kelso: in service; others: failed.
+    25077 => { mccants => 1 },	# 16-Oct-2014: Kelso: failed; others: operational
+				# 11-Dec-2014: Sladen: failed
     25262 => { kelso => 1 },	# Kelso: spare; others: operational.
     25263 => { sladen => 1 },	# Sladen: operational; others: spare.
+    25286 => { sladen => 1 },	# 11-Dec-2014: Sladen: tumbling; others: operational
+    25777 => { sladen => 1 },	# 11-Dec-2014: Sladen: operational; others: tumbling
     27374 => { kelso => 1 },	# 16-Nov-2012 Sladen: operational;
 				# 18-Feb-2014 McCants: operational;
 				#             others: spare
     27376 => { sladen => 1 },	# 08-Apr-2014 Sladen: declares operational;
 				#             others: spare
+    27451 => { sladen => 1 },	# 09-Sep-2014:: Sladen declares in-service.
 );
 
 =begin comment
@@ -226,7 +235,7 @@ EOD
  25041   Iridium 40     [+]      
  25042   Iridium 39     [+]      
  25043   Iridium 38     [-]      Tumbling
- 25077   Iridium 42     [+]      
+ 25077   Iridium 42     [-]      Tumbling
  25078   Iridium 44     [-]      Tumbling
  25104   Iridium 45     [+]      
  25105   Iridium 24     [-]      Tumbling
@@ -305,7 +314,7 @@ EOD
  24907   Iridium 22     [+]      Plane 2
  24925   Dummy mass 1   [-]      Dummy
  24926   Dummy mass 2   [-]      Dummy
- 24944   Iridium 29     [+]      Plane 3
+ 24944   Iridium 29     [-]      Plane 3 - Failed on station?
  24945   Iridium 32     [+]      Plane 3
  24946   Iridium 33     [-]      Plane 3
  24948   Iridium 28     [-]      Plane 3 - Failed on station?
@@ -321,9 +330,9 @@ EOD
  25041   Iridium 40     [+]      Plane 6
  25042   Iridium 39     [+]      Plane 6
  25043   Iridium 38     [-]      Plane 6
- 25077   Iridium 42     [+]      Plane 6
+ 25077   Iridium 42     [-]      Plane 6
  25078   Iridium 44     [-]      Plane 6
- 25104   Iridium 45     [S]      Plane 2
+ 25104   Iridium 45     [+]      Plane 3
  25105   Iridium 24     [-]      Plane 2
  25106   Iridium 47     [+]      Plane 2
  25108   Iridium 49     [+]      Plane 2
@@ -340,7 +349,7 @@ EOD
  25275   Iridium 59     [+]      Plane 3
  25276   Iridium 60     [+]      Plane 3
  25285   Iridium 62     [+]      Plane 1
- 25286   Iridium 63     [+]      Plane 1
+ 25286   Iridium 63     [-]      Plane 1 - Failed on station?
  25287   Iridium 64     [+]      Plane 1
  25288   Iridium 65     [+]      Plane 1
  25289   Iridium 66     [+]      Plane 1
@@ -365,7 +374,7 @@ EOD
  25531   Iridium 83     [+]      Plane 5
  25577   Iridium 20     [+]      Plane 2
  25578   Iridium 11     [+]      Plane 2
- 25777   Iridium 14     [S]      Plane 1
+ 25777   Iridium 14     [+]      Plane 1
  25778   Iridium 21     [+]      Plane 1
  27372   Iridium 91     [+]      Plane 3
  27373   Iridium 90     [S]      Plane 5
@@ -373,7 +382,7 @@ EOD
  27375   Iridium 95     [+]      Plane 3
  27376   Iridium 96     [+]      Plane 4
  27450   Iridium 97     [+]      Plane 4
- 27451   Iridium 98     [S]      Plane 6
+ 27451   Iridium 98     [+]      Plane 6
 EOD
 	) {
     my ( $what, $file, $data ) = @$_;
