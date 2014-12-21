@@ -135,7 +135,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.088_01';
+our $VERSION = '0.088_02';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -2287,12 +2287,17 @@ sub mccants {
 =item $resp = $st->names (source)
 
 This method retrieves the names of the catalogs for the given source,
-either C<'celestrak'>, C<'iridium_status'>, C<'mccants'>,
-C<'spaceflight'>, or C<'spacetrack'>, in the content of the given
-HTTP::Response object. In list context, you also get a reference to a
-list of two-element lists; each inner list contains the description and
-the catalog name, in that order (suitable for inserting into a Tk
-Optionmenu).
+either C<'celestrak'>, C<'celestrak_supplemental'>, C<'iridium_status'>,
+C<'mccants'>, C<'spaceflight'>, or C<'spacetrack'>, in the content of
+the given HTTP::Response object. If the argument is not one of the
+supported values, the C<$resp> object represents a 404 (Not found)
+error.
+
+In list context, you also get a reference to a list of two-element
+lists; each inner list contains the description and the catalog name, in
+that order (suitable for inserting into a Tk Optionmenu). If the
+argument is not one of the supported values, the second return will be
+C<undef>.
 
 No Space Track username and password are required to use this method,
 since all it is doing is returning data kept by this module.
@@ -2304,7 +2309,7 @@ sub names {
     $name = lc $name;
     delete $self->{_pragmata};
 
-    $catalogs{$name} or return HTTP::Response (
+    $catalogs{$name} or return HTTP::Response->new(
 	    HTTP_NOT_FOUND, "Data source '$name' not found.");
     my $src = $catalogs{$name};
     $name eq 'spacetrack'
