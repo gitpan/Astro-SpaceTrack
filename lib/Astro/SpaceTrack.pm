@@ -135,7 +135,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.088_02';
+our $VERSION = '0.088_03';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -364,11 +364,17 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    navigation => {
 		name => 'Navigation satellites',
 		favorite	=> 'Navigation',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
 #		number => 5,
 	    },
 	    weather => {
 		name => 'Weather satellites',
 		favorite	=> 'Weather',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
 #		number => 7,
 	    },
 	    iridium => {
@@ -419,17 +425,47 @@ my %catalogs = (	# Catalog names (and other info) for each source.
 	    amateur => {
 		favorite	=> 'Amateur',
 		name => 'Amateur Radio satellites',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
 #		number => 19,
 	    },
 	    visible => {
 		favorite	=> 'Visible',
 		name => 'Visible satellites',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
 #		number => 21,
 	    },
 	    special => {
 		favorite	=> 'Special_interest',
 		name => 'Special interest satellites',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
 #		number => 23,
+	    },
+	    bright_geosynchronous => {
+		favorite	=> 'brightgeo',
+		name => 'Bright Geosynchronous satellites',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
+	    },
+	    human_spaceflight => {
+		favorite	=> 'human_spaceflight',
+		name => 'Human Spaceflight',
+		tle => {
+		    EPOCH	=> '>now-30',
+		},
+	    },
+	    well_tracked_objects	=> {
+		name	=> 'Well-Tracked Objects',
+		satcat	=> {
+		    COUNTRY	=> 'UNKN',
+		    SITE	=> 'UNKN',
+		},
 	    },
 	},
     ],
@@ -3873,6 +3909,12 @@ The following catalogs are available:
     amateur         Amateur Radio satellites
     visible         Visible satellites
     special         Special satellites
+    bright_geosynchronous
+                    Bright Geosynchronous satellites
+    human_spaceflight
+                    Human Spaceflight
+    well_tracked_objects
+                    Well-Tracked Objects
 
 The following option is supported:
 
@@ -3993,7 +4035,7 @@ sub spacetrack {
 
 	}
 
-	$rslt = $self->retrieve( \%retrieve_opt,
+	$rslt = $self->retrieve( $opt,
 	    sort { $a <=> $b } keys %oid );
 
 	$rslt->is_success()
