@@ -135,7 +135,7 @@ use warnings;
 
 use base qw{Exporter};
 
-our $VERSION = '0.088_03';
+our $VERSION = '0.088_04';
 our @EXPORT_OK = qw{shell BODY_STATUS_IS_OPERATIONAL BODY_STATUS_IS_SPARE
     BODY_STATUS_IS_TUMBLING};
 our %EXPORT_TAGS = (
@@ -1854,7 +1854,7 @@ The BODY_STATUS constants are exportable using the :status tag.
 		->is_success() or return $resp;
 	}
 	$resp->content (join '', map {
-		sprintf "%6d   %-15s%-8s %s\n", @{$rslt{$_}}}
+		sprintf "%6d   %-15s%-8s %s\n", @{$rslt{$_}}[0 .. 3]}
 	    sort {$a <=> $b} keys %rslt);
 	$self->_add_pragmata($resp,
 	    'spacetrack-type' => 'iridium-status',
@@ -4562,11 +4562,15 @@ sub _accumulate_json_data {
 
 sub _accumulate_json_return {
     my ( $self, $context ) = @_;
+
+    my $json = $context->{json} ||= $self->_get_json_object(
+	pretty => $context->{opt}{pretty},
+    );
+
     $context->{data} ||= [];	# In case we did not find anything.
-    return wantarray ? (
-	$context->{json}->encode( $context->{data} ),
-	$context->{data},
-    ) : $context->{json}->encode( $context->{data} );
+    return wantarray
+	? ( $json->encode( $context->{data} ), $context->{data} )
+	: $json->encode( $context->{data} );
 }
 
 sub _accumulate_unknown_data {

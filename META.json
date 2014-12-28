@@ -59,7 +59,7 @@
    "provides" : {
       "Astro::SpaceTrack" : {
          "file" : "lib/Astro/SpaceTrack.pm",
-         "version" : "0.088_03"
+         "version" : "0.088_04"
       }
    },
    "release_status" : "testing",
@@ -71,5 +71,5 @@
          "http://dev.perl.org/licenses/"
       ]
    },
-   "version" : "0.088_03"
+   "version" : "0.088_04"
 }
